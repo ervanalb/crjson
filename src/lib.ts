@@ -1,16 +1,16 @@
 // Atomic types are: numbers, strings, empty list [], empty object {}, null, true, false.
 type Atomic = number | string | object | null | boolean;
 
-// Any hashable type can be used as a userId. All atomic items must be hashable, such as strings and numbers.
+// Any hashable type can be used as a userID. All atomic items must be hashable, such as strings and numbers.
 type Comparable = Atomic;
 
 type JSONType = any;
 
 // A combination of a user ID + an op ID gives a unique identifier for a datum.
-// userId is set on construction (and must be unique in the system) and opId increments for every operation.
+// userID is set on construction (and must be unique in the system) and opID increments for every operation.
 interface UniqueID {
-    userId: Comparable;
-    opId: number;
+    userID: Comparable;
+    opID: number;
 }
 
 type Datum = Atom | (Atom & InArray) | (Atom & InObject);
@@ -33,12 +33,6 @@ interface InArray {
 interface InObject {
     index: string;
 }
-
-// A model is the backing data structure for a State.
-// The data are stored flat.
-interface Model {
-    data: Array<Datum>;
-};
 
 // More practical version of typeOf for JSON
 export function betterTypeOf(item: Comparable): string {
@@ -101,10 +95,10 @@ export function compareUIDs(first: UniqueID, second: UniqueID) {
     if (first !== undefined && second === undefined) {
         return 1;
     }
-    if (first.userId != second.userId) {
-        return compare(first.userId, second.userId);
+    if (first.userID != second.userID) {
+        return compare(first.userID, second.userID);
     }
-    return first.opId - second.opId;
+    return first.opID - second.opID;
 }
 
 // Compare vector indices. Returns negative if first < second, positive if first > second, and zero if they are equal.
@@ -241,57 +235,77 @@ export function objectMap(o: object, f: (item: any, key: any, obj: object) => an
     return result;
 }
 
-// Converts a Model into its JSON representation
-export function modelToJSON(model: Model): JSONType {
-    function getArray(parent: UniqueID) {
-        const children = filterChildren(model.data, parent);
-        const grouped = groupByVectorIndex(children);
-        const sortedIndices = sortedVectorIndices(children);
-        const arrayAsObj = objectMap(grouped, getValue);
-        return arrayMap(sortedIndices, vectorIndex => arrayAsObj[vectorIndex]);
-    }
-
-    function getObject(parent: UniqueID) {
-        const children = filterChildren(model.data, parent);
-        const grouped = groupByStringIndex(children);
-        return objectMap(grouped, getValue);
-    }
-
-    function getValue(data: Array<Datum>) {
-        const datum = mergeAtoms(data);
-        if (datum === undefined) {
-            return undefined;
-        }
-        const typeOfValue = betterTypeOf(datum.value);
-        if (typeOfValue == "array") {
-            return getArray(datum.uid);
-        } else if (typeOfValue == "object") {
-            return getObject(datum.uid);
-        } else {
-            return <Datum>datum.value;
-        }
-    }
-
-    const root = getValue(filterChildren(model.data, undefined)); // undefined parent indicates root object
-    if (root === undefined) {
-        // Totally empty slate
-        return null;
-    }
-    return root;
-}
-
 export class State {
     uid: UniqueID;
-    model: Model;
+    model: Array<Datum>;
+    json: JSONType;
     version: Array<UniqueID>;
 
-    constructor(userId: Comparable) {
+    constructor(userID: Comparable) {
         this.uid = {
-            userId: userId,
-            opId: 0,
+            userID: userID,
+            opID: 0,
         }
-        this.model = {
-            data: [],
+        this.model = [];
+        this.json = null;
+    }
+
+    // Retrieves a new UID for constructing an operation.
+    getUID(): UniqueID {
+        const result = {
+            userID: this.uid.userID,
+            opID: this.uid.opID,
         };
+        this.uid.opID++;
+        return result;
+    }
+
+    // Apply an action
+    apply(action: Datum) {
+        this.model.push(action);
+        this.updateJSONFromModel();
+    }
+
+    // Converts a Model into its JSON representation
+    // and, in doing so, prunes non-useful entries in the model.
+    updateJSONFromModel() {
+        const model = this.model;
+
+        function getArray(parent: UniqueID) {
+            const children = filterChildren(model, parent);
+            const grouped = groupByVectorIndex(children);
+            const sortedIndices = sortedVectorIndices(children);
+            const arrayAsObj = objectMap(grouped, getValue);
+            return arrayMap(sortedIndices, vectorIndex => arrayAsObj[vectorIndex]);
+        }
+
+        function getObject(parent: UniqueID) {
+            const children = filterChildren(model, parent);
+            const grouped = groupByStringIndex(children);
+            return objectMap(grouped, getValue);
+        }
+
+        function getValue(data: Array<Datum>) {
+            const datum = mergeAtoms(data);
+            if (datum === undefined) {
+                return undefined;
+            }
+            const typeOfValue = betterTypeOf(datum.value);
+            if (typeOfValue == "array") {
+                return getArray(datum.uid);
+            } else if (typeOfValue == "object") {
+                return getObject(datum.uid);
+            } else {
+                return <Datum>datum.value;
+            }
+        }
+
+        const root = getValue(filterChildren(model, undefined)); // undefined parent indicates root object
+        if (root === undefined) {
+            // Totally empty slate
+            this.json = null;
+        } else {
+            this.json = root;
+        }
     }
 }
