@@ -64,4 +64,11 @@ s.apply({
         counter: 0,
 });
 
+s.apply({
+        uid: s.getUID(),
+        parent: dictUID,
+        index: "c",
+        counter: 1,
+});
+
 console.log(s.json);

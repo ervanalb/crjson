@@ -271,6 +271,10 @@ export class State {
     updateJSONFromModel() {
         const model = this.model;
 
+        // Keep track of which data are actually used to construct the JSON,
+        // so we can prune the others
+        const usefulData = [];
+
         function getArray(parent: UniqueID) {
             const children = filterChildren(model, parent);
             const grouped = groupByVectorIndex(children);
@@ -290,6 +294,7 @@ export class State {
             if (datum === undefined) {
                 return undefined;
             }
+            usefulData.push(datum);
             const typeOfValue = betterTypeOf(datum.value);
             if (typeOfValue == "array") {
                 return getArray(datum.uid);
@@ -307,5 +312,9 @@ export class State {
         } else {
             this.json = root;
         }
+
+        // Prune useless data
+        this.model = this.model.filter(item => usefulData.indexOf(item) >= 0);
+        // TODO we can further prune deletion actions according to the version vector.
     }
 }
