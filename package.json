@@ -1,0 +1,16 @@
+{
+  "name": "crjson",
+  "version": "0.1.0",
+  "description": "Conflict-free replicated JSON for serverless state synchronization",
+  "main": "dist/index.js",
+  "scripts": {
+    "start": "tsc && node dist/app.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "Eric Van Albert",
+  "license": "MIT",
+  "devDependencies": {
+    "tslint": "^5.12.1",
+    "typescript": "^3.3.3"
+  }
+}
