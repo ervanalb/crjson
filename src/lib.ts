@@ -16,10 +16,11 @@ interface UniqueID {
 type Datum = Atom | (Atom & InArray) | (Atom & InObject);
 
 // A datum is an atomic value i.e. one whose merge function returns one of the two arguments rather than an amalgamation of them.
+// If "value" is missing, then this atom represents a deletion.
 interface Atom {
     uid: UniqueID;
-    parent: UniqueID | null;
-    value: any;
+    parent?: UniqueID;
+    value?: any;
     counter: number; // Lamport counter
 }
 
@@ -36,11 +37,14 @@ interface InObject {
 // A model is the backing data structure for a State.
 // The data are stored flat.
 interface Model {
-    data: Array<Datum>
+    data: Array<Datum>;
 };
 
 // More practical version of typeOf for JSON
 export function betterTypeOf(item: Comparable): string {
+    if (item === undefined) {
+        return "empty";
+    }
     if (item === null) {
         return "null";
     }
@@ -49,6 +53,9 @@ export function betterTypeOf(item: Comparable): string {
     }
     if (typeof item == "number") {
         return "number";
+    }
+    if (typeof item == "string") {
+        return "string";
     }
     if (Array.isArray(item)) {
         return "array";
@@ -62,11 +69,13 @@ export function betterTypeOf(item: Comparable): string {
 // Compares values. Returns negative if first < second, positive if first > second, and zero if they are equal.
 export function compare(first: Comparable, second: Comparable): number {
     const typeOrdering = {
+        "empty": -1,
         "null": 0,
         "boolean": 1,
         "number": 2,
-        "array": 3,
-        "object": 4,
+        "string": 3,
+        "array": 4,
+        "object": 5,
     }
     const typeOfFirst = betterTypeOf(first);
     const typeOfSecond = betterTypeOf(second);
@@ -82,14 +91,14 @@ export function compare(first: Comparable, second: Comparable): number {
 }
 
 // Compare UIDs. Returns negative if first < second, positive if first > second, and zero if they are equal.
-export function compareUIDs(first: UniqueID | null, second: UniqueID | null) {
-    if (first === null && second === null) {
+export function compareUIDs(first: UniqueID, second: UniqueID) {
+    if (first === undefined && second === undefined) {
         return 0;
     }
-    if (first === null && second !== null) {
+    if (first === undefined && second !== undefined) {
         return -1;
     }
-    if (first !== null && second === null) {
+    if (first !== undefined && second === undefined) {
         return 1;
     }
     if (first.userId != second.userId) {
@@ -98,15 +107,33 @@ export function compareUIDs(first: UniqueID | null, second: UniqueID | null) {
     return first.opId - second.opId;
 }
 
+// Compare vector indices. Returns negative if first < second, positive if first > second, and zero if they are equal.
+export function compareVectorIndices(first: Array<number>, second: Array<number>) {
+    for(let i = 0; i < Math.max(first.length, second.length); i++) {
+        const firstIndex = first[i];
+        const secondIndex = second[i];
+        if (firstIndex === undefined) {
+            return -1;
+        }
+        if (secondIndex === undefined) {
+            return 1;
+        }
+        if (firstIndex != secondIndex) {
+            return firstIndex - secondIndex;
+        }
+    }
+    return 0;
+}
+
 // Filters a model on a given parent
 export function filterChildren(data: Array<Datum>, parent: UniqueID): Array<Datum> {
     return data.filter(item => compareUIDs(item.parent, parent) == 0);
 }
 
 // Returns the best atom candidate in a list
-export function mergeAtoms(data: Array<Datum>): Datum | null {
+export function mergeAtoms(data: Array<Datum>): Datum {
     if (data.length == 0) {
-        return null;
+        return undefined;
     }
     return data.reduce((prev, cur) => {
         if (cur.counter > prev.counter) {
@@ -125,13 +152,40 @@ export function mergeAtoms(data: Array<Datum>): Datum | null {
     });
 }
 
+// Sorts vector indices
+export function sortedVectorIndices(data: Array<Datum>): Array<Array<number>> {
+    // Extract vector indices into array
+    const arrayIndices = [];
+    data.forEach(d => {
+        const datum = <Atom & InObject>d;
+        if (datum.index !== undefined && betterTypeOf(datum.index) == "array") {
+            arrayIndices.push(datum.index);
+        }
+    });
+
+    // Sort by vector index
+    arrayIndices.sort(compareVectorIndices);
+
+    // Remove duplicates
+    const uniqueIndices = [];
+    let lastVectorIndex;
+    arrayIndices.forEach(vectorIndex => {
+        if (lastVectorIndex === undefined || compareVectorIndices(lastVectorIndex, vectorIndex) != 0) {
+            uniqueIndices.push(vectorIndex);
+        }
+        lastVectorIndex = vectorIndex;
+    });
+
+    return uniqueIndices;
+}
+
 // Groups a flat list of Datums by their string indices (for datums in objects)
 export function groupByStringIndex(data: Array<Datum>): { [key: string]: Array<Datum>; } {
     const result = {};
 
     data.forEach(d => {
-        const datum = <Datum & InObject>d;
-        if (datum.index !== undefined && typeof datum.index == "string") {
+        const datum = <Atom & InObject>d;
+        if (datum.index !== undefined && betterTypeOf(datum.index) == "string") {
             if (result[datum.index] !== undefined) {
                 result[datum.index].push(datum);
             } else {
@@ -143,11 +197,46 @@ export function groupByStringIndex(data: Array<Datum>): { [key: string]: Array<D
     return result;
 }
 
-// Array.map, but for object
+// Groups a flat list of Datums by their vector indices (for datums in arrays)
+export function groupByVectorIndex(data: Array<Datum>): { [key: string]: Array<Datum>; } {
+    const result = {};
+
+    data.forEach(d => {
+        const datum = <Atom & InArray>d;
+        if (datum.index !== undefined && betterTypeOf(datum.index) == "array") {
+            const stringIndex = datum.index.toString(); // Should be safe, since the key is a list of ints
+            if (result[stringIndex] !== undefined) {
+                result[stringIndex].push(datum);
+            } else {
+                result[stringIndex] = [datum];
+            }
+        }
+    });
+
+    return result;
+}
+
+// Array.map, but removes undefined entries.
+export function arrayMap(a: Array<any>, f: (item: any, key: any, arr: Array<any>) => any): Array<any> {
+    const result = [];
+    for (const index in a) {
+        const value = f(a[index], index, a);
+        if (value !== undefined) {
+            result.push(value);
+        }
+    }
+    return result;
+}
+
+// Array.map, but for object.
+// If the function returns undefined, the value is omitted.
 export function objectMap(o: object, f: (item: any, key: any, obj: object) => any): object {
     const result = {};
     for (const key in o) {
-        result[key] = f(o[key], key, o);
+        const value = f(o[key], key, o);
+        if (value !== undefined) {
+            result[key] = value;
+        }
     }
     return result;
 }
@@ -155,8 +244,11 @@ export function objectMap(o: object, f: (item: any, key: any, obj: object) => an
 // Converts a Model into its JSON representation
 export function modelToJSON(model: Model): JSONType {
     function getArray(parent: UniqueID) {
-        const data = filterChildren(model.data, parent);
-        return [];
+        const children = filterChildren(model.data, parent);
+        const grouped = groupByVectorIndex(children);
+        const sortedIndices = sortedVectorIndices(children);
+        const arrayAsObj = objectMap(grouped, getValue);
+        return arrayMap(sortedIndices, vectorIndex => arrayAsObj[vectorIndex]);
     }
 
     function getObject(parent: UniqueID) {
@@ -167,8 +259,8 @@ export function modelToJSON(model: Model): JSONType {
 
     function getValue(data: Array<Datum>) {
         const datum = mergeAtoms(data);
-        if (datum === null) {
-            return null;
+        if (datum === undefined) {
+            return undefined;
         }
         const typeOfValue = betterTypeOf(datum.value);
         if (typeOfValue == "array") {
@@ -180,12 +272,18 @@ export function modelToJSON(model: Model): JSONType {
         }
     }
 
-    return getValue(filterChildren(model.data, null)); // null parent indicates root object
+    const root = getValue(filterChildren(model.data, undefined)); // undefined parent indicates root object
+    if (root === undefined) {
+        // Totally empty slate
+        return null;
+    }
+    return root;
 }
 
 export class State {
     uid: UniqueID;
     model: Model;
+    version: Array<UniqueID>;
 
     constructor(userId: Comparable) {
         this.uid = {
