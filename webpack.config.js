@@ -22,7 +22,7 @@ module.exports = (env, argv) => {
     resolve: {
       extensions: ['.tsx', '.ts', '.js'],
     },
-    entry: './index.js',
+    entry: './src',
     output: {
       path: distPath,
       filename: "crjson.js",
