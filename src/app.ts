@@ -1,6 +1,9 @@
-import {State} from "./lib"
+import {State, Datum, JSONType} from "./lib";
 
 const s = new State("user1");
+s.addListener((model: Array<Datum>, json: JSONType) => {
+    console.log("Model changed!", model.length);
+});
 
 let state = s.state();
 s.setState(state.model, "first post!");

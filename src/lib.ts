@@ -1,27 +1,29 @@
 // Atomic types are: numbers, strings, empty list [], empty object {}, null, true, false.
-type Atomic = number | string | object | null | boolean;
+export type Atomic = number | string | object | null | boolean;
 
 // Any hashable type can be used as a userID. All atomic items must be hashable, such as strings and numbers.
-type Comparable = Atomic;
+export type Comparable = Atomic;
 
-type JSONType = any;
+export type JSONType = any;
 
 // A combination of a user ID + an op ID gives a unique identifier for a datum.
 // userID is set on construction (and must be unique in the system) and opID increments for every operation.
-interface UniqueID {
+export interface UniqueID {
     userID: Comparable;
     opID: number;
 }
 
 // A datum is an atomic value i.e. one whose merge function returns one of the two arguments rather than an amalgamation of them.
 // If "value" is missing, then this atom represents a deletion.
-interface Datum {
+export interface Datum {
     uid: UniqueID;
     parent?: UniqueID;
     value?: any;
     counter: number; // Lamport counter
     index?: Array<number> | string; // An array index is done using a vector, and an object index is a string.
 }
+
+export type Listener = (model: Array<Datum>, json: JSONType) => void;
 
 // More practical version of typeOf for JSON
 export function betterTypeOf(item: Comparable): string {
@@ -347,7 +349,8 @@ export class State {
     _uid: UniqueID;
     _model: Array<Datum>;
     _json: JSONType;
-    version: Array<UniqueID>;
+    _version: Array<UniqueID>;
+    _listeners: Array<Listener>;
 
     constructor(userID: Comparable) {
         this._uid = {
@@ -356,6 +359,7 @@ export class State {
         }
         this._model = [];
         this._json = null;
+        this._listeners = [];
     }
 
     // Retrieves a new UID for constructing an operation.
@@ -368,16 +372,37 @@ export class State {
         return result;
     }
 
-    // Apply an action
-    apply(action: Datum) {
-        console.log("Apply", action);
-        this._model.push(action);
-        this._updateJSONFromModel();
+    // Apply an array of actions.
+    // For local changes, set emit=true to also issue an _emit call.
+    // For remote changes, set emit=false to avoid flooding the channel.
+    // Also converts a Model into its JSON representation
+    // and, in doing so, prunes non-useful entries in the model.
+    apply(actions: Array<Datum>, emit: boolean) {
+        if (actions.length == 0) {
+            return;
+        }
+
+        this._model.push(...actions);
+        const result = modelToJson(this._model, undefined); // undefined parent indicates root object
+        this._json = result.json;
+
+        // Prune useless data
+        this._model = this._model.filter(item => result.usefulData.indexOf(item) >= 0);
+        // TODO we can further prune deletion actions according to the version vector.
+
+        if (emit) {
+            this._emit(actions);
+        }
+
+        this._changed(this._model, this._json);
     }
 
-    // Apply an array of actions
-    applyEach(actions: Array<Datum>) {
-        actions.forEach(this.apply.bind(this));
+    // Emits the complete state
+    emitCompleteState() {
+        if (this._model.length == 0) {
+            return;
+        }
+        this._emit(this._model);
     }
 
     // Gets the current state (internal & JSON)
@@ -392,18 +417,32 @@ export class State {
     // Sets the current state based on an old model and new JSON
     setState(model: Array<Datum>, json: JSONType) {
         const diff = this._jsonDiff(model, json);
-        this.applyEach(diff);
+        this.apply(diff, true);
     }
 
-    // Converts a Model into its JSON representation
-    // and, in doing so, prunes non-useful entries in the model.
-    _updateJSONFromModel() {
-        const result = modelToJson(this._model, undefined); // undefined parent indicates root object
-        this._json = result.json;
+    // Adds a new listener callback function, which will be called when the model changes
+    addListener(listener: Listener) {
+        this._listeners.push(listener);
+    }
 
-        // Prune useless data
-        this._model = this._model.filter(item => result.usefulData.indexOf(item) >= 0);
-        // TODO we can further prune deletion actions according to the version vector.
+    // Removes a listener
+    removeListener(listener: Listener) {
+        const ix = this._listeners.indexOf(listener);
+        if (ix >= 0) {
+            this._listeners.splice(ix, 1);
+        }
+    }
+
+    // Calls all listeners
+    _changed(model: Array<Datum>, json: JSONType) {
+        this._listeners.forEach(listener => {
+            listener(model, json);
+        });
+    }
+
+    // Override this method to send out state changes over a channel
+    _emit(model: Array<Datum>) {
+        // Not implemented
     }
 
     // Diffs a JSON object with the given model, returning a list of new items to add to the model.
