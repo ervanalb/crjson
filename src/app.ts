@@ -1,4 +1,4 @@
-import {State} from "./lib"
+import {State, jsonDiff} from "./lib"
 
 const s = new State("user1");
 
@@ -72,3 +72,7 @@ s.apply({
 });
 
 console.log(s.json);
+
+const jsonCopy = JSON.parse(JSON.stringify(s.json));
+jsonCopy.e = ["first", "mid2", "last"];
+jsonDiff(s.model, jsonCopy);

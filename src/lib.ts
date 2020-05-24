@@ -235,6 +235,229 @@ export function objectMap(o: object, f: (item: any, key: any, obj: object) => an
     return result;
 }
 
+// Converts a (partial) model into its JSON representation
+export function modelToJson(model: Array<Datum>, root: Array<Datum>) {
+    // Keep track of which data are actually used to construct the JSON,
+    // so we can prune the others
+    const usefulData = [];
+
+    function getArray(parent: UniqueID) {
+        const children = filterChildren(model, parent);
+        const grouped = groupByVectorIndex(children);
+        const sortedIndices = sortedVectorIndices(children);
+        const arrayAsObj = objectMap(grouped, getValue);
+        return arrayMap(sortedIndices, vectorIndex => arrayAsObj[vectorIndex]);
+    }
+
+    function getObject(parent: UniqueID) {
+        const children = filterChildren(model, parent);
+        const grouped = groupByStringIndex(children);
+        return objectMap(grouped, getValue);
+    }
+
+    function getValue(data: Array<Datum>) {
+        const datum = mergeAtoms(data);
+        if (datum === undefined) {
+            return undefined;
+        }
+        usefulData.push(datum);
+        const typeOfValue = betterTypeOf(datum.value);
+        if (typeOfValue == "array") {
+            return getArray(datum.uid);
+        } else if (typeOfValue == "object") {
+            return getObject(datum.uid);
+        } else {
+            return <Datum>datum.value;
+        }
+    }
+
+    if (root === undefined) {
+        root = filterChildren(model, undefined); // Parent === undefined indicates root items
+    }
+
+    let rootJSON = getValue(root);
+    if (rootJSON === undefined) {
+        // Totally empty slate
+        rootJSON = null;
+    }
+
+    return {
+        json: rootJSON,
+        usefulData: usefulData
+    }
+}
+
+// Returns true if the two JSON objects are exactly equal.
+export function jsonEqual(first: JSONType, second: JSONType): boolean {
+    return JSON.stringify(first) == JSON.stringify(second);
+}
+
+// Diffs a JSON object with the given model.
+export function jsonDiff(model: Array<Datum>, json: JSONType) {
+
+    const newOps: Array<Datum> = [];
+
+    function checkArray(parent: UniqueID, json: Array<JSONType>) {
+        interface DiffOperation {
+            cost: number;
+            prev?: [number, number];
+            operation?: string;
+            oldIndex?: number;
+            newIndex?: number;
+        };
+
+        const children = filterChildren(model, parent);
+        const grouped = groupByVectorIndex(children);
+        const sortedIndices = sortedVectorIndices(children);
+        const jsonArrayAsObj = objectMap(grouped, data => modelToJson(model, data).json);
+        const modelJSON = arrayMap(sortedIndices, vectorIndex => jsonArrayAsObj[vectorIndex]);
+        const modelData = arrayMap(sortedIndices, vectorIndex => grouped[vectorIndex]);
+
+        // We now have two JSON arrays, "modelJSON" and "json".
+        console.log("Array compare: model", modelJSON, "with", json);
+
+        // Perform Wagner-Fisher algorithm on them
+        // (algorithm from pseudocode on wikipedia)
+        const matrix: { [key: string]: DiffOperation; } = {};
+        matrix[[0, 0].toString()] = {cost: 0};
+        for (let i = 1; i <= modelJSON.length; i++) {
+            matrix[[i, 0].toString()] = {
+                cost: i,
+                prev: [i - 1, 0],
+                operation: "delete",
+                oldIndex: i - 1,
+                newIndex: -1,
+            }
+        }
+        for (let j = 1; j <= json.length; j++) {
+            matrix[[0, j].toString()] = {
+                cost: j,
+                prev: [0, j - 1],
+                operation: "insert",
+                oldIndex: -1, // insert at beginning
+                newIndex: j - 1,
+            };
+        }
+        for (let i = 1; i <= modelJSON.length; i++) {
+            for (let j = 1; j <= json.length; j++) {
+                let substitutionCost = 1;
+                if (jsonEqual(modelJSON[i - 1], json[j - 1])) {
+                    substitutionCost = 0;
+                }
+
+                const deletion: DiffOperation = {
+                    cost: matrix[[i - 1, j].toString()].cost + 1,
+                    prev: [i - 1, j],
+                    operation: "delete",
+                };
+                const insertion: DiffOperation = {
+                    cost: matrix[[i, j - 1].toString()].cost + 1,
+                    prev: [i, j - 1],
+                    operation: "insert",
+                };
+                const substitution: DiffOperation = {
+                    cost: matrix[[i - 1, j - 1].toString()].cost + substitutionCost,
+                    prev: [i - 1, j - 1],
+                }
+                if (substitutionCost > 0) {
+                    substitution.operation = "substitute";
+                }
+
+                let lowestCostOp = substitution;
+                if (insertion.cost < lowestCostOp.cost) {
+                    lowestCostOp = insertion;
+                }
+                if (deletion.cost < lowestCostOp.cost) {
+                    lowestCostOp = deletion;
+                }
+
+                lowestCostOp.oldIndex = i - 1;
+                lowestCostOp.newIndex = j - 1;
+
+                matrix[[i, j].toString()] = lowestCostOp;
+            }
+        }
+
+        let o = matrix[[modelJSON.length, json.length].toString()];
+
+        const ops = [];
+        while (o.cost > 0) {
+            if (o.operation !== undefined) {
+                ops[o.cost - 1] = o;
+            }
+            o = matrix[o.prev.toString()];
+        }
+
+        // Apply the operations, recursing as needed
+        ops.forEach(op => {
+            if (op.operation == "insert") {
+                let leftIndex = undefined;
+                if (op.oldIndex >= 0) {
+                    leftIndex = sortedIndices[op.oldIndex];
+                }
+                let rightIndex = undefined;
+                if (op.oldIndex + 1 < sortedIndices.length) {
+                    rightIndex = sortedIndices[op.oldIndex + 1];
+                }
+                console.log("Need to add", json[op.newIndex], "to", parent, "between indices", leftIndex, "and", rightIndex);
+            } else if (op.operation == "delete") {
+                console.log("Need to remove", modelData[op.oldIndex]);
+            } else if (op.operation == "substitute") {
+                checkValue(parent, modelData[op.oldIndex], json[op.newIndex]);
+            }
+        });
+    }
+
+    function checkObject(parent: UniqueID, json: object) {
+        const children = filterChildren(model, parent);
+        const grouped = groupByStringIndex(children);
+
+        for (const modelKey in grouped) {
+            checkValue(parent, grouped[modelKey], json[modelKey]);
+        }
+        for (const jsonKey in json) {
+            if (!(jsonKey in grouped)) {
+                console.log("Need to add", json[jsonKey], "to", parent, "at index", jsonKey)
+            }
+        }
+    }
+
+    function checkValue(parent: UniqueID, data: Array<Datum>, json: JSONType) {
+        const datum = mergeAtoms(data);
+        if (datum === undefined) {
+            // Datum is undefined if data was empty, such as a totally blank slate model
+            if (json !== undefined) {
+                console.log("Need to add", json, "to", parent, "with no index");
+                return;
+            }
+        }
+        if (json === undefined && datum.value !== undefined) {
+            // Passing in json === undefined indicates that any value at this slot should be deleted.
+            // datum.value being undefined represents a deletion action in the model, and so
+            // datum.value being defined indicates that there is in fact a value to delete
+            console.log("Need to remove", datum);
+            return;
+        }
+        const typeOfModel = betterTypeOf(datum.value);
+        const typeOfJson = betterTypeOf(json);
+        if (typeOfModel != typeOfJson) {
+            console.log("Need to add", json, "to", parent, "replacing datum", datum);
+            return;
+        }
+
+        if (typeOfModel == "array") {
+            return checkArray(datum.uid, json);
+        } else if (typeOfModel == "object") {
+            return checkObject(datum.uid, json);
+        } else if (datum.value != json) {
+            console.log("Need to add", json, "to", parent, "replacing datum", datum);
+            return;
+        }
+    }
+
+    checkValue(undefined, filterChildren(model, undefined), json); // undefined parent indicates root object
+}
+
 export class State {
     uid: UniqueID;
     model: Array<Datum>;
@@ -269,52 +492,11 @@ export class State {
     // Converts a Model into its JSON representation
     // and, in doing so, prunes non-useful entries in the model.
     updateJSONFromModel() {
-        const model = this.model;
-
-        // Keep track of which data are actually used to construct the JSON,
-        // so we can prune the others
-        const usefulData = [];
-
-        function getArray(parent: UniqueID) {
-            const children = filterChildren(model, parent);
-            const grouped = groupByVectorIndex(children);
-            const sortedIndices = sortedVectorIndices(children);
-            const arrayAsObj = objectMap(grouped, getValue);
-            return arrayMap(sortedIndices, vectorIndex => arrayAsObj[vectorIndex]);
-        }
-
-        function getObject(parent: UniqueID) {
-            const children = filterChildren(model, parent);
-            const grouped = groupByStringIndex(children);
-            return objectMap(grouped, getValue);
-        }
-
-        function getValue(data: Array<Datum>) {
-            const datum = mergeAtoms(data);
-            if (datum === undefined) {
-                return undefined;
-            }
-            usefulData.push(datum);
-            const typeOfValue = betterTypeOf(datum.value);
-            if (typeOfValue == "array") {
-                return getArray(datum.uid);
-            } else if (typeOfValue == "object") {
-                return getObject(datum.uid);
-            } else {
-                return <Datum>datum.value;
-            }
-        }
-
-        const root = getValue(filterChildren(model, undefined)); // undefined parent indicates root object
-        if (root === undefined) {
-            // Totally empty slate
-            this.json = null;
-        } else {
-            this.json = root;
-        }
+        const result = modelToJson(this.model, undefined); // undefined parent indicates root object
+        this.json = result.json;
 
         // Prune useless data
-        this.model = this.model.filter(item => usefulData.indexOf(item) >= 0);
+        this.model = this.model.filter(item => result.usefulData.indexOf(item) >= 0);
         // TODO we can further prune deletion actions according to the version vector.
     }
 }
