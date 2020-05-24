@@ -1,4 +1,4 @@
-import {State, Datum, JSONType, Comparable} from "./state";
+import {State, Datum, Comparable} from "./state";
 
 // This class is not particuarly useful, but shows the simplest way that State can be extended.
 
