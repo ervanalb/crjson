@@ -70,6 +70,15 @@ export function compare(first: Comparable, second: Comparable): number {
         return <number>first - <number>second;
     }
 
+    if (typeOfFirst == "string") {
+        if (<string>first > <string>second) {
+            return 1;
+        } else if (<string>first < <string>second) {
+            return -1;
+        }
+        return 0;
+    }
+
     return 0; // Consider all arrays equal and all objects equal
 }
 
