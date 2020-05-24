@@ -292,6 +292,41 @@ export function jsonEqual(first: JSONType, second: JSONType): boolean {
     return JSON.stringify(first) == JSON.stringify(second);
 }
 
+// Allocates a new vector index that falls between the two given vector indices.
+export function vectorIndexBetween(left: Array<number>, right: Array<number>) {
+    // Uses the algorithm described in this paper, but with only the boundary+ strategy right now.
+    // Brice Nédelec, Pascal Molli, Achour Mostefaoui, Emmanuel Desmontils. LSEQ: an Adaptive Structure
+    // for Sequences in Distributed Collaborative Editing. 13th ACM Symposium on Document Engineering
+    // (DocEng), Sep 2013, Florence, Italy. pp.37–46, ff10.1145/2494266.2494278ff. ffhal-00921633f
+
+    function allocateBetween(left: Array<number>, right: Array<number>, level: number) {
+        let leftNum = 0;
+        let rightNum = Math.pow(2, level + 4);
+        if (left !== undefined && left[level] !== undefined) {
+            leftNum = Math.max(leftNum, left[level]);
+        }
+        if (right !== undefined && right[level] !== undefined) {
+            rightNum = Math.min(rightNum, right[level]);
+        }
+
+        if (leftNum + 1 > rightNum) {
+            throw `Invalid interval: (${left}, ${right})`;
+        }
+
+        // We can allocate a new number on the open interval (leftNum, rightNum)
+        if (leftNum + 1 == rightNum) {
+            return [leftNum].concat(allocateBetween(left, right, level + 1));
+        }
+        const lowerBound = leftNum + 1;
+        const upperBound = Math.min(lowerBound + 10, rightNum);
+        const newIndex = lowerBound + Math.floor(Math.random() * (upperBound - lowerBound));
+        return [newIndex];
+    }
+
+    const result = allocateBetween(left, right, 0);
+    return result;
+}
+
 // Diffs a JSON object with the given model.
 export function jsonDiff(model: Array<Datum>, json: JSONType) {
 
@@ -314,7 +349,6 @@ export function jsonDiff(model: Array<Datum>, json: JSONType) {
         const modelData = arrayMap(sortedIndices, vectorIndex => grouped[vectorIndex]);
 
         // We now have two JSON arrays, "modelJSON" and "json".
-        console.log("Array compare: model", modelJSON, "with", json);
 
         // Perform Wagner-Fisher algorithm on them
         // (algorithm from pseudocode on wikipedia)
@@ -399,7 +433,9 @@ export function jsonDiff(model: Array<Datum>, json: JSONType) {
                 if (op.oldIndex + 1 < sortedIndices.length) {
                     rightIndex = sortedIndices[op.oldIndex + 1];
                 }
-                console.log("Need to add", json[op.newIndex], "to", parent, "between indices", leftIndex, "and", rightIndex);
+                const newVectorIndex = vectorIndexBetween(leftIndex, rightIndex);
+                console.log("Need to add", json[op.newIndex], "to", parent, "at index", newVectorIndex);
+                sortedIndices[op.oldIndex] = newVectorIndex; // So that multiple insertions appear in-order
             } else if (op.operation == "delete") {
                 console.log("Need to remove", modelData[op.oldIndex]);
             } else if (op.operation == "substitute") {

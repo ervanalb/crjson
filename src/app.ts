@@ -43,7 +43,7 @@ s.apply({
 s.apply({
         uid: s.getUID(),
         parent: arrUID,
-        index: [0],
+        index: [1],
         value: "first",
         counter: 0,
 });
@@ -51,7 +51,7 @@ s.apply({
 s.apply({
         uid: s.getUID(),
         parent: arrUID,
-        index: [1],
+        index: [2],
         value: "last",
         counter: 0,
 });
@@ -59,8 +59,8 @@ s.apply({
 s.apply({
         uid: s.getUID(),
         parent: arrUID,
-        index: [0, 5],
-        value: "middle",
+        index: [1, 5],
+        value: {},
         counter: 0,
 });
 
@@ -74,5 +74,5 @@ s.apply({
 console.log(s.json);
 
 const jsonCopy = JSON.parse(JSON.stringify(s.json));
-jsonCopy.e = ["first", "mid2", "last"];
+jsonCopy.e = ["first", {"pos": "middle"}, "last"];
 jsonDiff(s.model, jsonCopy);
