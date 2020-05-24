@@ -136,9 +136,9 @@ export function mergeAtoms(data: Array<Datum>): Datum {
             return prev;
         }
         const uidComparison = compareUIDs(cur.uid, prev.uid);
-        if (uidComparison < 0) {
+        if (uidComparison > 0) {
             return cur;
-        } else if (uidComparison > 0) {
+        } else if (uidComparison < 0) {
             return prev;
         } else {
             throw "Could not find ordering between objects";
@@ -301,31 +301,54 @@ export function vectorIndexBetween(left: Array<number>, right: Array<number>) {
     // for Sequences in Distributed Collaborative Editing. 13th ACM Symposium on Document Engineering
     // (DocEng), Sep 2013, Florence, Italy. pp.37–46, ff10.1145/2494266.2494278ff. ffhal-00921633f
 
-    function allocateBetween(left: Array<number>, right: Array<number>, level: number) {
+    function allocateBetween(left: Array<number>, right: Array<number>, level: number, carry: boolean) {
+        const boundary = 20;
+
         let leftNum = 0;
         let rightNum = Math.pow(2, level + 4);
         if (left !== undefined && left[level] !== undefined) {
             leftNum = Math.max(leftNum, left[level]);
         }
-        if (right !== undefined && right[level] !== undefined) {
+        if (right !== undefined && right[level] !== undefined && !carry) {
             rightNum = Math.min(rightNum, right[level]);
         }
 
-        if (leftNum + 1 > rightNum) {
-            throw `Invalid interval: (${left}, ${right})`;
+        if (leftNum > rightNum) {
+            throw `Backwards interval: (${left} ${right})`;
+        }
+        if (leftNum == rightNum && (level + 1 >= left.length || level + 1 >= right.length)) {
+            throw `Empty interval: (${left} ${right})`;
         }
 
         // We can allocate a new number on the open interval (leftNum, rightNum)
-        if (leftNum + 1 == rightNum) {
-            return [leftNum].concat(allocateBetween(left, right, level + 1));
+        if (leftNum + 1 >= rightNum) {
+            return [leftNum].concat(allocateBetween(left, right, level + 1, leftNum < rightNum));
         }
         const lowerBound = leftNum + 1;
-        const upperBound = Math.min(lowerBound + 10, rightNum);
+        const upperBound = Math.min(lowerBound + boundary, rightNum);
         const newIndex = lowerBound + Math.floor(Math.random() * (upperBound - lowerBound));
         return [newIndex];
     }
 
-    const result = allocateBetween(left, right, 0);
+    // Make sure arrays are same length
+    let leftArray;
+    let rightArray;
+    if (left !== undefined && right !== undefined) {
+        leftArray = left.slice();
+        rightArray = right.slice();
+
+        for (let i = 0; i < left.length - right.length; i++) {
+            rightArray.push(0);
+        }
+        for (let i = 0; i < right.length - left.length; i++) {
+            leftArray.push(0);
+        }
+    } else {
+        leftArray = left;
+        rightArray = right;
+    }
+
+    const result = allocateBetween(leftArray, rightArray, 0, false);
     return result;
 }
 
@@ -377,7 +400,7 @@ export class State {
     // For remote changes, set emit=false to avoid flooding the channel.
     // Also converts a Model into its JSON representation
     // and, in doing so, prunes non-useful entries in the model.
-    apply(actions: Array<Datum>, emit: boolean) {
+    apply(actions: Array<Datum>, emit?: boolean) {
         if (actions.length == 0) {
             return;
         }
