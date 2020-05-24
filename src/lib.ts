@@ -13,25 +13,14 @@ interface UniqueID {
     opID: number;
 }
 
-type Datum = Atom | (Atom & InArray) | (Atom & InObject);
-
 // A datum is an atomic value i.e. one whose merge function returns one of the two arguments rather than an amalgamation of them.
 // If "value" is missing, then this atom represents a deletion.
-interface Atom {
+interface Datum {
     uid: UniqueID;
     parent?: UniqueID;
     value?: any;
     counter: number; // Lamport counter
-}
-
-// This is a mixin type to "Atom" to indicate that it is stored in an array.
-interface InArray {
-    index: Array<number>; // An array index is done using a vector.
-}
-
-// This is a mixin type to "Atom" to indicate that it is stored in an object.
-interface InObject {
-    index: string;
+    index?: Array<number> | string; // An array index is done using a vector, and an object index is a string.
 }
 
 // More practical version of typeOf for JSON
@@ -150,8 +139,7 @@ export function mergeAtoms(data: Array<Datum>): Datum {
 export function sortedVectorIndices(data: Array<Datum>): Array<Array<number>> {
     // Extract vector indices into array
     const arrayIndices = [];
-    data.forEach(d => {
-        const datum = <Atom & InObject>d;
+    data.forEach(datum => {
         if (datum.index !== undefined && betterTypeOf(datum.index) == "array") {
             arrayIndices.push(datum.index);
         }
@@ -177,13 +165,12 @@ export function sortedVectorIndices(data: Array<Datum>): Array<Array<number>> {
 export function groupByStringIndex(data: Array<Datum>): { [key: string]: Array<Datum>; } {
     const result = {};
 
-    data.forEach(d => {
-        const datum = <Atom & InObject>d;
+    data.forEach(datum => {
         if (datum.index !== undefined && betterTypeOf(datum.index) == "string") {
-            if (result[datum.index] !== undefined) {
-                result[datum.index].push(datum);
+            if (result[<string>datum.index] !== undefined) {
+                result[<string>datum.index].push(datum);
             } else {
-                result[datum.index] = [datum];
+                result[<string>datum.index] = [datum];
             }
         }
     });
@@ -195,8 +182,7 @@ export function groupByStringIndex(data: Array<Datum>): { [key: string]: Array<D
 export function groupByVectorIndex(data: Array<Datum>): { [key: string]: Array<Datum>; } {
     const result = {};
 
-    data.forEach(d => {
-        const datum = <Atom & InArray>d;
+    data.forEach(datum => {
         if (datum.index !== undefined && betterTypeOf(datum.index) == "array") {
             const stringIndex = datum.index.toString(); // Should be safe, since the key is a list of ints
             if (result[stringIndex] !== undefined) {
@@ -327,8 +313,78 @@ export function vectorIndexBetween(left: Array<number>, right: Array<number>) {
     return result;
 }
 
-// Diffs a JSON object with the given model.
-export function jsonDiff(model: Array<Datum>, json: JSONType) {
+// Creates the list of operations necessary to add the given JSON to a model.
+// parent & index may be undefined if this is to be a root object.
+export function jsonToModel(json: JSONType, getUID: () => UniqueID, counter: number, parent: UniqueID, index: string | Array<number>): Array<Datum> {
+    const data: Array<Datum> = [];
+
+    function addArray(json: Array<JSONType>, parent: UniqueID) {
+        let leftBound = undefined;
+        json.forEach(value => {
+            const index = vectorIndexBetween(leftBound, undefined);
+            addValue(value, 0, parent, index);
+            leftBound = index;
+        });
+    }
+
+    function addObject(json: object, parent: UniqueID) {
+        for (const key in json) {
+            addValue(json[key], 0, parent, key);
+        }
+    }
+
+    function addValue(json: JSONType, counter: number, parent: UniqueID, index: string | Array<number>) {
+        const typeOfValue = betterTypeOf(json);
+        let value;
+        if (typeOfValue == "array") {
+            value = [];
+        } else if (typeOfValue == "object") {
+            value = {};
+        } else {
+            value = json;
+        }
+        const datum: Datum = {
+            uid: getUID(),
+            value: value,
+            counter: counter,
+        };
+        if (parent !== undefined) {
+            datum.parent = parent;
+        }
+        if (index !== undefined) {
+            datum.index = index;
+        }
+        data.push(datum);
+        if (typeOfValue == "array") {
+            addArray(json, datum.uid);
+        } else if (typeOfValue == "object") {
+            addObject(json, datum.uid);
+        }
+    }
+
+    addValue(json, counter, parent, index);
+
+    return data;
+}
+
+// Creates an operations to remove an entry from the model..
+// Parent & index may be undefined if this is to be a root object.
+export function tombstone(uid: UniqueID, datum: Datum): Datum {
+    const tombstone: Datum = {
+        uid: uid,
+        counter: datum.counter + 1,
+    };
+    if (datum.parent !== undefined) {
+        tombstone.parent = datum.parent;
+    }
+    if (datum.index !== undefined) {
+        tombstone.index = datum.index;
+    }
+    return tombstone;
+}
+
+// Diffs a JSON object with the given model, returning a list of new items to add to the model.
+export function jsonDiff(model: Array<Datum>, json: JSONType, getUID: () => UniqueID): Array<Datum> {
 
     const newOps: Array<Datum> = [];
 
@@ -434,10 +490,10 @@ export function jsonDiff(model: Array<Datum>, json: JSONType) {
                     rightIndex = sortedIndices[op.oldIndex + 1];
                 }
                 const newVectorIndex = vectorIndexBetween(leftIndex, rightIndex);
-                console.log("Need to add", json[op.newIndex], "to", parent, "at index", newVectorIndex);
+                newOps.push(...jsonToModel(json[op.newIndex], getUID, 0, parent, newVectorIndex));
                 sortedIndices[op.oldIndex] = newVectorIndex; // So that multiple insertions appear in-order
             } else if (op.operation == "delete") {
-                console.log("Need to remove", modelData[op.oldIndex]);
+                newOps.push(tombstone(getUID(), modelData[op.oldIndex]));
             } else if (op.operation == "substitute") {
                 checkValue(parent, modelData[op.oldIndex], json[op.newIndex]);
             }
@@ -453,7 +509,7 @@ export function jsonDiff(model: Array<Datum>, json: JSONType) {
         }
         for (const jsonKey in json) {
             if (!(jsonKey in grouped)) {
-                console.log("Need to add", json[jsonKey], "to", parent, "at index", jsonKey)
+                newOps.push(...jsonToModel(json[jsonKey], getUID, 0, parent, jsonKey));
             }
         }
     }
@@ -463,7 +519,7 @@ export function jsonDiff(model: Array<Datum>, json: JSONType) {
         if (datum === undefined) {
             // Datum is undefined if data was empty, such as a totally blank slate model
             if (json !== undefined) {
-                console.log("Need to add", json, "to", parent, "with no index");
+                newOps.push(...jsonToModel(json, getUID, 0, parent, undefined));
                 return;
             }
         }
@@ -471,13 +527,13 @@ export function jsonDiff(model: Array<Datum>, json: JSONType) {
             // Passing in json === undefined indicates that any value at this slot should be deleted.
             // datum.value being undefined represents a deletion action in the model, and so
             // datum.value being defined indicates that there is in fact a value to delete
-            console.log("Need to remove", datum);
+            newOps.push(tombstone(getUID(), datum));
             return;
         }
         const typeOfModel = betterTypeOf(datum.value);
         const typeOfJson = betterTypeOf(json);
         if (typeOfModel != typeOfJson) {
-            console.log("Need to add", json, "to", parent, "replacing datum", datum);
+            newOps.push(...jsonToModel(json, getUID, datum.counter + 1, parent, datum.index));
             return;
         }
 
@@ -486,12 +542,14 @@ export function jsonDiff(model: Array<Datum>, json: JSONType) {
         } else if (typeOfModel == "object") {
             return checkObject(datum.uid, json);
         } else if (datum.value != json) {
-            console.log("Need to add", json, "to", parent, "replacing datum", datum);
+            newOps.push(...jsonToModel(json, getUID, datum.counter + 1, parent, datum.index));
             return;
         }
     }
 
     checkValue(undefined, filterChildren(model, undefined), json); // undefined parent indicates root object
+
+    return newOps;
 }
 
 export class State {
@@ -523,6 +581,11 @@ export class State {
     apply(action: Datum) {
         this.model.push(action);
         this.updateJSONFromModel();
+    }
+
+    // Apply an array of actions
+    applyEach(actions: Array<Datum>) {
+        actions.forEach(this.apply.bind(this));
     }
 
     // Converts a Model into its JSON representation

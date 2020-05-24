@@ -60,7 +60,7 @@ s.apply({
         uid: s.getUID(),
         parent: arrUID,
         index: [1, 5],
-        value: {},
+        value: "middle",
         counter: 0,
 });
 
@@ -75,4 +75,7 @@ console.log(s.json);
 
 const jsonCopy = JSON.parse(JSON.stringify(s.json));
 jsonCopy.e = ["first", {"pos": "middle"}, "last"];
-jsonDiff(s.model, jsonCopy);
+const diff = jsonDiff(s.model, jsonCopy, s.getUID.bind(s));
+s.applyEach(diff);
+
+console.log(s.json);
