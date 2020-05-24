@@ -1,4 +1,4 @@
-import {State, jsonDiff} from "./lib"
+import {State} from "./lib"
 
 const s = new State("user1");
 
@@ -71,11 +71,7 @@ s.apply({
         counter: 1,
 });
 
-console.log(s.json);
-
-const jsonCopy = JSON.parse(JSON.stringify(s.json));
-jsonCopy.e = ["first", {"pos": "middle"}, "last"];
-const diff = jsonDiff(s.model, jsonCopy, s.getUID.bind(s));
-s.applyEach(diff);
-
-console.log(s.json);
+const state = s.state();
+state.json = ["first", {"pos": "middle"}, "last"];
+s.setState(state.model, state.json);
+console.log(s.state().json)

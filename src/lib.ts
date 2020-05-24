@@ -278,6 +278,11 @@ export function jsonEqual(first: JSONType, second: JSONType): boolean {
     return JSON.stringify(first) == JSON.stringify(second);
 }
 
+// Returns a deep copy of a JSON object
+export function jsonCopy(json: JSONType): JSONType {
+    return JSON.parse(JSON.stringify(json));
+}
+
 // Allocates a new vector index that falls between the two given vector indices.
 export function vectorIndexBetween(left: Array<number>, right: Array<number>) {
     // Uses the algorithm described in this paper, but with only the boundary+ strategy right now.
@@ -313,60 +318,6 @@ export function vectorIndexBetween(left: Array<number>, right: Array<number>) {
     return result;
 }
 
-// Creates the list of operations necessary to add the given JSON to a model.
-// parent & index may be undefined if this is to be a root object.
-export function jsonToModel(json: JSONType, getUID: () => UniqueID, counter: number, parent: UniqueID, index: string | Array<number>): Array<Datum> {
-    const data: Array<Datum> = [];
-
-    function addArray(json: Array<JSONType>, parent: UniqueID) {
-        let leftBound = undefined;
-        json.forEach(value => {
-            const index = vectorIndexBetween(leftBound, undefined);
-            addValue(value, 0, parent, index);
-            leftBound = index;
-        });
-    }
-
-    function addObject(json: object, parent: UniqueID) {
-        for (const key in json) {
-            addValue(json[key], 0, parent, key);
-        }
-    }
-
-    function addValue(json: JSONType, counter: number, parent: UniqueID, index: string | Array<number>) {
-        const typeOfValue = betterTypeOf(json);
-        let value;
-        if (typeOfValue == "array") {
-            value = [];
-        } else if (typeOfValue == "object") {
-            value = {};
-        } else {
-            value = json;
-        }
-        const datum: Datum = {
-            uid: getUID(),
-            value: value,
-            counter: counter,
-        };
-        if (parent !== undefined) {
-            datum.parent = parent;
-        }
-        if (index !== undefined) {
-            datum.index = index;
-        }
-        data.push(datum);
-        if (typeOfValue == "array") {
-            addArray(json, datum.uid);
-        } else if (typeOfValue == "object") {
-            addObject(json, datum.uid);
-        }
-    }
-
-    addValue(json, counter, parent, index);
-
-    return data;
-}
-
 // Creates an operations to remove an entry from the model..
 // Parent & index may be undefined if this is to be a root object.
 export function tombstone(uid: UniqueID, datum: Datum): Datum {
@@ -383,204 +334,36 @@ export function tombstone(uid: UniqueID, datum: Datum): Datum {
     return tombstone;
 }
 
-// Diffs a JSON object with the given model, returning a list of new items to add to the model.
-export function jsonDiff(model: Array<Datum>, json: JSONType, getUID: () => UniqueID): Array<Datum> {
-
-    const newOps: Array<Datum> = [];
-
-    function checkArray(parent: UniqueID, json: Array<JSONType>) {
-        interface DiffOperation {
-            cost: number;
-            prev?: [number, number];
-            operation?: string;
-            oldIndex?: number;
-            newIndex?: number;
-        };
-
-        const children = filterChildren(model, parent);
-        const grouped = groupByVectorIndex(children);
-        const sortedIndices = sortedVectorIndices(children);
-        const jsonArrayAsObj = objectMap(grouped, data => modelToJson(model, data).json);
-        const modelJSON = arrayMap(sortedIndices, vectorIndex => jsonArrayAsObj[vectorIndex]);
-        const modelData = arrayMap(sortedIndices, vectorIndex => grouped[vectorIndex]);
-
-        // We now have two JSON arrays, "modelJSON" and "json".
-
-        // Perform Wagner-Fisher algorithm on them
-        // (algorithm from pseudocode on wikipedia)
-        const matrix: { [key: string]: DiffOperation; } = {};
-        matrix[[0, 0].toString()] = {cost: 0};
-        for (let i = 1; i <= modelJSON.length; i++) {
-            matrix[[i, 0].toString()] = {
-                cost: i,
-                prev: [i - 1, 0],
-                operation: "delete",
-                oldIndex: i - 1,
-                newIndex: -1,
-            }
-        }
-        for (let j = 1; j <= json.length; j++) {
-            matrix[[0, j].toString()] = {
-                cost: j,
-                prev: [0, j - 1],
-                operation: "insert",
-                oldIndex: -1, // insert at beginning
-                newIndex: j - 1,
-            };
-        }
-        for (let i = 1; i <= modelJSON.length; i++) {
-            for (let j = 1; j <= json.length; j++) {
-                let substitutionCost = 1;
-                if (jsonEqual(modelJSON[i - 1], json[j - 1])) {
-                    substitutionCost = 0;
-                }
-
-                const deletion: DiffOperation = {
-                    cost: matrix[[i - 1, j].toString()].cost + 1,
-                    prev: [i - 1, j],
-                    operation: "delete",
-                };
-                const insertion: DiffOperation = {
-                    cost: matrix[[i, j - 1].toString()].cost + 1,
-                    prev: [i, j - 1],
-                    operation: "insert",
-                };
-                const substitution: DiffOperation = {
-                    cost: matrix[[i - 1, j - 1].toString()].cost + substitutionCost,
-                    prev: [i - 1, j - 1],
-                }
-                if (substitutionCost > 0) {
-                    substitution.operation = "substitute";
-                }
-
-                let lowestCostOp = substitution;
-                if (insertion.cost < lowestCostOp.cost) {
-                    lowestCostOp = insertion;
-                }
-                if (deletion.cost < lowestCostOp.cost) {
-                    lowestCostOp = deletion;
-                }
-
-                lowestCostOp.oldIndex = i - 1;
-                lowestCostOp.newIndex = j - 1;
-
-                matrix[[i, j].toString()] = lowestCostOp;
-            }
-        }
-
-        let o = matrix[[modelJSON.length, json.length].toString()];
-
-        const ops = [];
-        while (o.cost > 0) {
-            if (o.operation !== undefined) {
-                ops[o.cost - 1] = o;
-            }
-            o = matrix[o.prev.toString()];
-        }
-
-        // Apply the operations, recursing as needed
-        ops.forEach(op => {
-            if (op.operation == "insert") {
-                let leftIndex = undefined;
-                if (op.oldIndex >= 0) {
-                    leftIndex = sortedIndices[op.oldIndex];
-                }
-                let rightIndex = undefined;
-                if (op.oldIndex + 1 < sortedIndices.length) {
-                    rightIndex = sortedIndices[op.oldIndex + 1];
-                }
-                const newVectorIndex = vectorIndexBetween(leftIndex, rightIndex);
-                newOps.push(...jsonToModel(json[op.newIndex], getUID, 0, parent, newVectorIndex));
-                sortedIndices[op.oldIndex] = newVectorIndex; // So that multiple insertions appear in-order
-            } else if (op.operation == "delete") {
-                newOps.push(tombstone(getUID(), modelData[op.oldIndex]));
-            } else if (op.operation == "substitute") {
-                checkValue(parent, modelData[op.oldIndex], json[op.newIndex]);
-            }
-        });
-    }
-
-    function checkObject(parent: UniqueID, json: object) {
-        const children = filterChildren(model, parent);
-        const grouped = groupByStringIndex(children);
-
-        for (const modelKey in grouped) {
-            checkValue(parent, grouped[modelKey], json[modelKey]);
-        }
-        for (const jsonKey in json) {
-            if (!(jsonKey in grouped)) {
-                newOps.push(...jsonToModel(json[jsonKey], getUID, 0, parent, jsonKey));
-            }
-        }
-    }
-
-    function checkValue(parent: UniqueID, data: Array<Datum>, json: JSONType) {
-        const datum = mergeAtoms(data);
-        if (datum === undefined) {
-            // Datum is undefined if data was empty, such as a totally blank slate model
-            if (json !== undefined) {
-                newOps.push(...jsonToModel(json, getUID, 0, parent, undefined));
-                return;
-            }
-        }
-        if (json === undefined && datum.value !== undefined) {
-            // Passing in json === undefined indicates that any value at this slot should be deleted.
-            // datum.value being undefined represents a deletion action in the model, and so
-            // datum.value being defined indicates that there is in fact a value to delete
-            newOps.push(tombstone(getUID(), datum));
-            return;
-        }
-        const typeOfModel = betterTypeOf(datum.value);
-        const typeOfJson = betterTypeOf(json);
-        if (typeOfModel != typeOfJson) {
-            newOps.push(...jsonToModel(json, getUID, datum.counter + 1, parent, datum.index));
-            return;
-        }
-
-        if (typeOfModel == "array") {
-            return checkArray(datum.uid, json);
-        } else if (typeOfModel == "object") {
-            return checkObject(datum.uid, json);
-        } else if (datum.value != json) {
-            newOps.push(...jsonToModel(json, getUID, datum.counter + 1, parent, datum.index));
-            return;
-        }
-    }
-
-    checkValue(undefined, filterChildren(model, undefined), json); // undefined parent indicates root object
-
-    return newOps;
-}
-
 export class State {
-    uid: UniqueID;
-    model: Array<Datum>;
-    json: JSONType;
+    _uid: UniqueID;
+    _model: Array<Datum>;
+    _json: JSONType;
     version: Array<UniqueID>;
 
     constructor(userID: Comparable) {
-        this.uid = {
+        this._uid = {
             userID: userID,
             opID: 0,
         }
-        this.model = [];
-        this.json = null;
+        this._model = [];
+        this._json = null;
     }
 
     // Retrieves a new UID for constructing an operation.
     getUID(): UniqueID {
         const result = {
-            userID: this.uid.userID,
-            opID: this.uid.opID,
+            userID: this._uid.userID,
+            opID: this._uid.opID,
         };
-        this.uid.opID++;
+        this._uid.opID++;
         return result;
     }
 
     // Apply an action
     apply(action: Datum) {
-        this.model.push(action);
-        this.updateJSONFromModel();
+        console.log("Apply", action);
+        this._model.push(action);
+        this._updateJSONFromModel();
     }
 
     // Apply an array of actions
@@ -588,14 +371,253 @@ export class State {
         actions.forEach(this.apply.bind(this));
     }
 
+    // Gets the current state (internal & JSON)
+    // The resulting JSON is a deep copy that can be modified.
+    state() {
+        return {
+            model: jsonCopy(this._model),
+            json: jsonCopy(this._json),
+        };
+    }
+
+    // Sets the current state based on an old model and new JSON
+    setState(model: Array<Datum>, json: JSONType) {
+        const diff = this._jsonDiff(model, json);
+        this.applyEach(diff);
+    }
+
     // Converts a Model into its JSON representation
     // and, in doing so, prunes non-useful entries in the model.
-    updateJSONFromModel() {
-        const result = modelToJson(this.model, undefined); // undefined parent indicates root object
-        this.json = result.json;
+    _updateJSONFromModel() {
+        const result = modelToJson(this._model, undefined); // undefined parent indicates root object
+        this._json = result.json;
 
         // Prune useless data
-        this.model = this.model.filter(item => result.usefulData.indexOf(item) >= 0);
+        this._model = this._model.filter(item => result.usefulData.indexOf(item) >= 0);
         // TODO we can further prune deletion actions according to the version vector.
+    }
+
+    // Diffs a JSON object with the given model, returning a list of new items to add to the model.
+    _jsonDiff(model: Array<Datum>, json: JSONType): Array<Datum> {
+
+        const newOps: Array<Datum> = [];
+
+        const checkArray = (parent: UniqueID, json: Array<JSONType>) => {
+            interface DiffOperation {
+                cost: number;
+                prev?: [number, number];
+                operation?: string;
+                oldIndex?: number;
+                newIndex?: number;
+            };
+
+            const children = filterChildren(model, parent);
+            const grouped = groupByVectorIndex(children);
+            const sortedIndices = sortedVectorIndices(children);
+            const jsonArrayAsObj = objectMap(grouped, data => modelToJson(model, data).json);
+            const modelJSON = arrayMap(sortedIndices, vectorIndex => jsonArrayAsObj[vectorIndex]);
+            const modelData = arrayMap(sortedIndices, vectorIndex => grouped[vectorIndex]);
+
+            // We now have two JSON arrays, "modelJSON" and "json".
+
+            // Perform Wagner-Fisher algorithm on them
+            // (algorithm from pseudocode on wikipedia)
+            const matrix: { [key: string]: DiffOperation; } = {};
+            matrix[[0, 0].toString()] = {cost: 0};
+            for (let i = 1; i <= modelJSON.length; i++) {
+                matrix[[i, 0].toString()] = {
+                    cost: i,
+                    prev: [i - 1, 0],
+                    operation: "delete",
+                    oldIndex: i - 1,
+                    newIndex: -1,
+                }
+            }
+            for (let j = 1; j <= json.length; j++) {
+                matrix[[0, j].toString()] = {
+                    cost: j,
+                    prev: [0, j - 1],
+                    operation: "insert",
+                    oldIndex: -1, // insert at beginning
+                    newIndex: j - 1,
+                };
+            }
+            for (let i = 1; i <= modelJSON.length; i++) {
+                for (let j = 1; j <= json.length; j++) {
+                    let substitutionCost = 1;
+                    if (jsonEqual(modelJSON[i - 1], json[j - 1])) {
+                        substitutionCost = 0;
+                    }
+
+                    const deletion: DiffOperation = {
+                        cost: matrix[[i - 1, j].toString()].cost + 1,
+                        prev: [i - 1, j],
+                        operation: "delete",
+                    };
+                    const insertion: DiffOperation = {
+                        cost: matrix[[i, j - 1].toString()].cost + 1,
+                        prev: [i, j - 1],
+                        operation: "insert",
+                    };
+                    const substitution: DiffOperation = {
+                        cost: matrix[[i - 1, j - 1].toString()].cost + substitutionCost,
+                        prev: [i - 1, j - 1],
+                    }
+                    if (substitutionCost > 0) {
+                        substitution.operation = "substitute";
+                    }
+
+                    let lowestCostOp = substitution;
+                    if (insertion.cost < lowestCostOp.cost) {
+                        lowestCostOp = insertion;
+                    }
+                    if (deletion.cost < lowestCostOp.cost) {
+                        lowestCostOp = deletion;
+                    }
+
+                    lowestCostOp.oldIndex = i - 1;
+                    lowestCostOp.newIndex = j - 1;
+
+                    matrix[[i, j].toString()] = lowestCostOp;
+                }
+            };
+
+            let o = matrix[[modelJSON.length, json.length].toString()];
+
+            const ops = [];
+            while (o.cost > 0) {
+                if (o.operation !== undefined) {
+                    ops[o.cost - 1] = o;
+                }
+                o = matrix[o.prev.toString()];
+            }
+
+            // Apply the operations, recursing as needed
+            ops.forEach(op => {
+                if (op.operation == "insert") {
+                    let leftIndex = undefined;
+                    if (op.oldIndex >= 0) {
+                        leftIndex = sortedIndices[op.oldIndex];
+                    }
+                    let rightIndex = undefined;
+                    if (op.oldIndex + 1 < sortedIndices.length) {
+                        rightIndex = sortedIndices[op.oldIndex + 1];
+                    }
+                    const newVectorIndex = vectorIndexBetween(leftIndex, rightIndex);
+                    newOps.push(...this._jsonToModel(json[op.newIndex], 0, parent, newVectorIndex));
+                    sortedIndices[op.oldIndex] = newVectorIndex; // So that multiple insertions appear in-order
+                } else if (op.operation == "delete") {
+                    newOps.push(tombstone(this.getUID(), modelData[op.oldIndex]));
+                } else if (op.operation == "substitute") {
+                    checkValue(parent, modelData[op.oldIndex], json[op.newIndex]);
+                }
+            });
+        };
+
+        const checkObject = (parent: UniqueID, json: object) => {
+            const children = filterChildren(model, parent);
+            const grouped = groupByStringIndex(children);
+
+            for (const modelKey in grouped) {
+                checkValue(parent, grouped[modelKey], json[modelKey]);
+            }
+            for (const jsonKey in json) {
+                if (!(jsonKey in grouped)) {
+                    newOps.push(...this._jsonToModel(json[jsonKey], 0, parent, jsonKey));
+                }
+            }
+        };
+
+        const checkValue = (parent: UniqueID, data: Array<Datum>, json: JSONType) => {
+            const datum = mergeAtoms(data);
+            if (datum === undefined) {
+                // Datum is undefined if data was empty, such as a totally blank slate model
+                if (json !== undefined) {
+                    newOps.push(...this._jsonToModel(json, 0, parent, undefined));
+                    return;
+                }
+            }
+            if (json === undefined && datum.value !== undefined) {
+                // Passing in json === undefined indicates that any value at this slot should be deleted.
+                // datum.value being undefined represents a deletion action in the model, and so
+                // datum.value being defined indicates that there is in fact a value to delete
+                newOps.push(tombstone(this.getUID(), datum));
+                return;
+            }
+            const typeOfModel = betterTypeOf(datum.value);
+            const typeOfJson = betterTypeOf(json);
+            if (typeOfModel != typeOfJson) {
+                newOps.push(...this._jsonToModel(json, datum.counter + 1, parent, datum.index));
+                return;
+            }
+
+            if (typeOfModel == "array") {
+                return checkArray(datum.uid, json);
+            } else if (typeOfModel == "object") {
+                return checkObject(datum.uid, json);
+            } else if (datum.value != json) {
+                newOps.push(...this._jsonToModel(json, datum.counter + 1, parent, datum.index));
+                return;
+            }
+        };
+
+        checkValue(undefined, filterChildren(model, undefined), json); // undefined parent indicates root object
+
+        return newOps;
+    }
+
+
+    // Creates the list of operations necessary to add the given JSON to a model.
+    // parent & index may be undefined if this is to be a root object.
+    _jsonToModel(json: JSONType, counter: number, parent: UniqueID, index: string | Array<number>): Array<Datum> {
+        const data: Array<Datum> = [];
+
+        const addArray = (json: Array<JSONType>, parent: UniqueID) => {
+            let leftBound = undefined;
+            json.forEach(value => {
+                const index = vectorIndexBetween(leftBound, undefined);
+                addValue(value, 0, parent, index);
+                leftBound = index;
+            });
+        };
+
+        const addObject = (json: object, parent: UniqueID) => {
+            for (const key in json) {
+                addValue(json[key], 0, parent, key);
+            }
+        };
+
+        const addValue = (json: JSONType, counter: number, parent: UniqueID, index: string | Array<number>) => {
+            const typeOfValue = betterTypeOf(json);
+            let value;
+            if (typeOfValue == "array") {
+                value = [];
+            } else if (typeOfValue == "object") {
+                value = {};
+            } else {
+                value = json;
+            }
+            const datum: Datum = {
+                uid: this.getUID(),
+                value: value,
+                counter: counter,
+            };
+            if (parent !== undefined) {
+                datum.parent = parent;
+            }
+            if (index !== undefined) {
+                datum.index = index;
+            }
+            data.push(datum);
+            if (typeOfValue == "array") {
+                addArray(json, datum.uid);
+            } else if (typeOfValue == "object") {
+                addObject(json, datum.uid);
+            }
+        };
+
+        addValue(json, counter, parent, index);
+
+        return data;
     }
 }
