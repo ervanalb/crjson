@@ -21,7 +21,7 @@ function setupPeer(initiator) {
 
     peer = new SimplePeer({
         initiator: initiator,
-        trickle: false,
+        trickle: true,
     });
 
     peer.on("error", err => {
@@ -29,7 +29,8 @@ function setupPeer(initiator) {
     });
 
     peer.on("signal", data => {
-        document.querySelector('#outgoing').value = JSON.stringify(data);
+        document.querySelector('#outgoing').value += JSON.stringify(data) + "\n";
+        console.log(data);
     });
 
     peer.on("connect", () => {
@@ -55,10 +56,19 @@ function stateChanged(model, json) {
 }
 
 function signalFormSubmitted(event) {
-    if (peer !== undefined) {
-        peer.signal(JSON.parse(document.querySelector("#incoming").value));
-    }
     event.preventDefault();
+
+    if (peer !== undefined) {
+        const lines = document.querySelector("#incoming").value.split("\n");
+        lines.forEach(line => {
+            line = line.replace(/^\s+|\s+$/g, '');
+            if (line) {
+                peer.signal(JSON.parse(line));
+            }
+        });
+        document.querySelector("#outgoing").value = "";
+        document.querySelector("#incoming").value = "";
+    }
 }
 
 function editJSON() {
