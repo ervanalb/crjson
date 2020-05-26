@@ -37,7 +37,7 @@ function setupPeer(initiator) {
     });
 
     peer.on("signal", data => {
-        document.querySelector('#outgoing').value += JSON.stringify(data) + "\n";
+        document.querySelector('#outgoing').value += btoa(JSON.stringify(data)) + "\n";
         console.log(data);
     });
 
@@ -71,7 +71,7 @@ function signalFormSubmitted(event) {
         lines.forEach(line => {
             line = line.replace(/^\s+|\s+$/g, '');
             if (line) {
-                peer.signal(JSON.parse(line));
+                peer.signal(JSON.parse(atob(line)));
             }
         });
         document.querySelector("#outgoing").value = "";
@@ -127,7 +127,7 @@ textarea {
         <textarea id="incoming"></textarea>
         <button type="submit">submit</button>
     </form>
-    <div>Copy content from this box into the other peer: (please be patient, this takes a little while)</div>
+    <div>Copy content from this box into the other peer:</div>
     <textarea id="outgoing" readonly></textarea>
 </div>
 <div id="app">
