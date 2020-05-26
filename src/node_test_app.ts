@@ -24,9 +24,13 @@ const j2 = s2.state().json;
 if (!jsonEqual(j1, j2)) {
     throw "Did not converge!";
 }
+console.log(j1);
 
 // Three options:
 // ["first", "middle1", "middle2", "last"]
 // ["first", "middle2", "middle1", "last"]
 // ["first", "middle2", "last"] (chance of index collision, resolved towards higher UID)
-console.log(j1)
+
+state = s1.state();
+s1.setState(state.model, ["first"]);
+console.log(s1.state().json);

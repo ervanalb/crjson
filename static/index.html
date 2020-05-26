@@ -22,6 +22,14 @@ function setupPeer(initiator) {
     peer = new SimplePeer({
         initiator: initiator,
         trickle: true,
+        config: {
+            iceServers: [
+                {urls: "stun:stun1.l.google.com:19302"},
+                {urls: "stun:stun2.l.google.com:19302"},
+                {urls: "stun:stun.ekiga.net"},
+            ],
+            iceCandidatePoolSize: 10,
+        }
     });
 
     peer.on("error", err => {

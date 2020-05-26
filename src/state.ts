@@ -578,7 +578,7 @@ export class State {
                     newOps.push(...this._jsonToModel(json[op.newIndex], 0, parent, newVectorIndex));
                     sortedIndices[op.oldIndex] = newVectorIndex; // So that multiple insertions appear in-order
                 } else if (op.operation == "delete") {
-                    newOps.push(tombstone(this.getUID(), modelData[op.oldIndex]));
+                    checkValue(parent, modelData[op.oldIndex], undefined); // Passing JSON=undefined generates a tombstone
                 } else if (op.operation == "substitute") {
                     checkValue(parent, modelData[op.oldIndex], json[op.newIndex]);
                 }
