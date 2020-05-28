@@ -5,6 +5,7 @@
   "main": "dist/index.js",
   "scripts": {
     "start": "tsc && node dist/node_test_app.js",
+    "fuzz": "tsc && node dist/fuzz.js",
     "dev": "webpack --mode development",
     "build": "webpack --mode production",
     "start:dev": "webpack-dev-server --mode development",

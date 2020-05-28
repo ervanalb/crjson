@@ -18,6 +18,7 @@ export class StateOverSimplePeer extends State {
         recipients.forEach(p => {
             p.send(message);
         });
+        console.log("Model is:", this._model);
         console.log("TX:", message);
     }
 
@@ -36,6 +37,7 @@ export class StateOverSimplePeer extends State {
             this.apply(message.data);
         }
         console.log("RX:", message);
+        console.log("Model is now:", this._model);
     }
 
     // Adds new data channel to keep in sync

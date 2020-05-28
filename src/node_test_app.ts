@@ -14,13 +14,13 @@ s2.setState(state.model, ["first", "last"]);
 console.log(s2.state().json)
 
 // Make a simultaneous change
-const state1 = s1.state();
-const state2 = s2.state();
+let state1 = s1.state();
+let state2 = s2.state();
 s1.setState(state1.model, ["first", "middle1", "last"]);
 s2.setState(state2.model, ["first", "middle2", "last"]);
 
-const j1 = s1.state().json;
-const j2 = s2.state().json;
+let j1 = s1.state().json;
+let j2 = s2.state().json;
 if (!jsonEqual(j1, j2)) {
     throw "Did not converge!";
 }
@@ -34,3 +34,19 @@ console.log(j1);
 state = s1.state();
 s1.setState(state.model, ["first"]);
 console.log(s1.state().json);
+
+state = s1.state();
+s1.setState(state.model, [1, 2, 3]);
+console.log(s1.state().json);
+
+state = s2.state();
+state1 = s1.state();
+state2 = s2.state();
+s2.setState(state.model, [2, 3]);
+console.log(s2.state().json);
+
+s1.setState(state1.model, [2, [3]]);
+s2.setState(state2.model, [[2], 3]);
+
+console.log(s1.state().json);
+console.log(s2.state().json);

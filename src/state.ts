@@ -232,7 +232,8 @@ export function objectMap(o: object, f: (item: any, key: any, obj: object) => an
     return result;
 }
 
-// Converts a (partial) model into its JSON representation
+// Converts a (partial) model into its JSON representation.
+// Returns undefined if the model is totally empty.
 export function modelToJson(model: Array<Datum>, root: Array<Datum>) {
     // Keep track of which data are actually used to construct the JSON,
     // so we can prune the others
@@ -273,10 +274,6 @@ export function modelToJson(model: Array<Datum>, root: Array<Datum>) {
     }
 
     let rootJSON = getValue(root);
-    if (rootJSON === undefined) {
-        // Totally empty slate
-        rootJSON = null;
-    }
 
     return {
         json: rootJSON,
@@ -286,11 +283,13 @@ export function modelToJson(model: Array<Datum>, root: Array<Datum>) {
 
 // Returns true if the two JSON objects are exactly equal.
 export function jsonEqual(first: JSONType, second: JSONType): boolean {
+    // WARNING! null equals undefined in this function!
     return JSON.stringify(first) == JSON.stringify(second);
 }
 
 // Returns a deep copy of a JSON object
 export function jsonCopy(json: JSONType): JSONType {
+    // WARNING! undefined may turn into null in this function!
     return JSON.parse(JSON.stringify(json));
 }
 
@@ -316,7 +315,7 @@ export function vectorIndexBetween(left: Array<number>, right: Array<number>) {
         if (leftNum > rightNum) {
             throw `Backwards interval: (${left} ${right})`;
         }
-        if (leftNum == rightNum && (level + 1 >= left.length || level + 1 >= right.length)) {
+        if (leftNum == rightNum && ((left !== undefined && level + 1 >= left.length) || (right !== undefined && level + 1 >= right.length))) {
             throw `Empty interval: (${left} ${right})`;
         }
 
@@ -405,9 +404,20 @@ export class State {
             return;
         }
 
+        // XXX
+        this._model.forEach(datum => {
+            console.assert(!isNaN(datum.counter), "Counter is NAN");
+            console.assert(datum.counter !== undefined, "Counter is undefined");
+        });
+        // End XXX
+
         this._model.push(...actions);
         const result = modelToJson(this._model, undefined); // undefined parent indicates root object
-        this._json = result.json;
+        if (result === undefined) {
+            this._json = null;
+        } else {
+            this._json = result.json;
+        }
 
         // Prune useless data
         this._model = this._model.filter(item => result.usefulData.indexOf(item) >= 0);
@@ -564,10 +574,15 @@ export class State {
             }
 
             // Apply the operations, recursing as needed
+            let lastOldIndex;
+            let lastVectorIndex;
             ops.forEach(op => {
                 if (op.operation == "insert") {
                     let leftIndex = undefined;
-                    if (op.oldIndex >= 0) {
+                    if (op.oldIndex == lastOldIndex) {
+                        // This case handles multiple insertions into the same spot (including multiple insertions into an empty array)
+                        leftIndex = lastVectorIndex;
+                    } else if (op.oldIndex >= 0) {
                         leftIndex = sortedIndices[op.oldIndex];
                     }
                     let rightIndex = undefined;
@@ -576,7 +591,8 @@ export class State {
                     }
                     const newVectorIndex = vectorIndexBetween(leftIndex, rightIndex);
                     newOps.push(...this._jsonToModel(json[op.newIndex], 0, parent, newVectorIndex));
-                    sortedIndices[op.oldIndex] = newVectorIndex; // So that multiple insertions appear in-order
+                    lastOldIndex = op.oldIndex;
+                    lastVectorIndex = newVectorIndex;
                 } else if (op.operation == "delete") {
                     checkValue(parent, modelData[op.oldIndex], undefined); // Passing JSON=undefined generates a tombstone
                 } else if (op.operation == "substitute") {
