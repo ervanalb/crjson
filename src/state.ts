@@ -404,7 +404,11 @@ export class State {
 
         // Prune useless data
         this._model = this._model.filter(item => result.usefulData.indexOf(item) >= 0);
-        // TODO we can further prune any tombstone which is less than the largest counter value in the graph (likely all tombstones)
+
+        // We can further prune any tombstone which is less than the largest counter value in the graph (likely all tombstones)
+        // XXX can't implement this yet until tombstones specify exactly which UID they are deleting.
+        //const topCounter = this._highestCounter(this._model);
+        //this._model = this._model.filter(item => !(item.value === undefined && item.counter < topCounter));
 
         if (emit) {
             this._emit(actions);
@@ -462,8 +466,8 @@ export class State {
     }
 
     // Gets a counter value one higher than anything seen in the given model
-    _nextCounterValue(model: Array<Datum>) {
-        return model.reduce((acc, datum) => (datum.counter > acc ? datum.counter : acc), -1) + 1;
+    _highestCounter(model: Array<Datum>) {
+        return model.reduce((acc, datum) => (datum.counter > acc ? datum.counter : acc), -1);
     }
 
     // Diffs a JSON object with the given model, returning a list of new items to add to the model.
@@ -709,7 +713,7 @@ export class State {
         // Actual content of _jsonDiff:
 
         const newOps: Array<Datum> = [];
-        let counter = this._nextCounterValue(model);
+        let counter = this._highestCounter(model) + 1;
 
         checkValue(undefined, filterChildren(model, undefined), json); // undefined parent indicates root object
 
