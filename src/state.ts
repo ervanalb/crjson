@@ -351,27 +351,10 @@ export function vectorIndexBetween(left: Array<number>, right: Array<number>) {
     return result;
 }
 
-// Creates an operations to remove an entry from the model..
-// Parent & index may be undefined if this is to be a root object.
-export function tombstone(uid: UniqueID, datum: Datum): Datum {
-    const tombstone: Datum = {
-        uid: uid,
-        counter: datum.counter + 1,
-    };
-    if (datum.parent !== undefined) {
-        tombstone.parent = datum.parent;
-    }
-    if (datum.index !== undefined) {
-        tombstone.index = datum.index;
-    }
-    return tombstone;
-}
-
 export class State {
     _uid: UniqueID;
     _model: Array<Datum>;
     _json: JSONType;
-    _version: Array<UniqueID>;
     _listeners: Array<Listener>;
 
     constructor(userID: Comparable) {
@@ -421,7 +404,7 @@ export class State {
 
         // Prune useless data
         this._model = this._model.filter(item => result.usefulData.indexOf(item) >= 0);
-        // TODO we can further prune deletion actions according to the version vector.
+        // TODO we can further prune any tombstone which is less than the largest counter value in the graph (likely all tombstones)
 
         if (emit) {
             this._emit(actions);
@@ -478,10 +461,13 @@ export class State {
         // Not implemented
     }
 
+    // Gets a counter value one higher than anything seen in the given model
+    _nextCounterValue(model: Array<Datum>) {
+        return model.reduce((acc, datum) => (datum.counter > acc ? datum.counter : acc), -1) + 1;
+    }
+
     // Diffs a JSON object with the given model, returning a list of new items to add to the model.
     _jsonDiff(model: Array<Datum>, json: JSONType): Array<Datum> {
-
-        const newOps: Array<Datum> = [];
 
         const checkArray = (parent: UniqueID, json: Array<JSONType>) => {
             interface DiffOperation {
@@ -496,8 +482,9 @@ export class State {
             const grouped = groupByVectorIndex(children);
             const sortedIndices = sortedVectorIndices(children);
             const jsonArrayAsObj = objectMap(grouped, data => modelToJson(model, data).json);
-            const modelJSON = arrayMap(sortedIndices, vectorIndex => jsonArrayAsObj[vectorIndex]);
-            const modelData = arrayMap(sortedIndices, vectorIndex => grouped[vectorIndex]);
+            const occupiedSortedIndices = arrayMap(sortedIndices, vectorIndex => jsonArrayAsObj[vectorIndex] === undefined ? undefined : vectorIndex);
+            const modelJSON = arrayMap(occupiedSortedIndices, vectorIndex => jsonArrayAsObj[vectorIndex]);
+            const modelData = arrayMap(occupiedSortedIndices, vectorIndex => grouped[vectorIndex]);
 
             // We now have two JSON arrays, "modelJSON" and "json".
 
@@ -583,14 +570,14 @@ export class State {
                         // This case handles multiple insertions into the same spot (including multiple insertions into an empty array)
                         leftIndex = lastVectorIndex;
                     } else if (op.oldIndex >= 0) {
-                        leftIndex = sortedIndices[op.oldIndex];
+                        leftIndex = occupiedSortedIndices[op.oldIndex];
                     }
                     let rightIndex = undefined;
-                    if (op.oldIndex + 1 < sortedIndices.length) {
-                        rightIndex = sortedIndices[op.oldIndex + 1];
+                    if (op.oldIndex + 1 < occupiedSortedIndices.length) {
+                        rightIndex = occupiedSortedIndices[op.oldIndex + 1];
                     }
                     const newVectorIndex = vectorIndexBetween(leftIndex, rightIndex);
-                    newOps.push(...this._jsonToModel(json[op.newIndex], 0, parent, newVectorIndex));
+                    newOps.push(...jsonToModel(json[op.newIndex], parent, newVectorIndex));
                     lastOldIndex = op.oldIndex;
                     lastVectorIndex = newVectorIndex;
                 } else if (op.operation == "delete") {
@@ -610,7 +597,7 @@ export class State {
             }
             for (const jsonKey in json) {
                 if (!(jsonKey in grouped)) {
-                    newOps.push(...this._jsonToModel(json[jsonKey], 0, parent, jsonKey));
+                    newOps.push(...jsonToModel(json[jsonKey], parent, jsonKey));
                 }
             }
         };
@@ -620,7 +607,7 @@ export class State {
             if (datum === undefined) {
                 // Datum is undefined if data was empty, such as a totally blank slate model
                 if (json !== undefined) {
-                    newOps.push(...this._jsonToModel(json, 0, parent, undefined));
+                    newOps.push(...jsonToModel(json, parent, undefined));
                     return;
                 }
             }
@@ -634,7 +621,7 @@ export class State {
             const typeOfModel = betterTypeOf(datum.value);
             const typeOfJson = betterTypeOf(json);
             if (typeOfModel != typeOfJson) {
-                newOps.push(...this._jsonToModel(json, datum.counter + 1, parent, datum.index));
+                newOps.push(...jsonToModel(json, parent, datum.index));
                 return;
             }
 
@@ -643,68 +630,89 @@ export class State {
             } else if (typeOfModel == "object") {
                 return checkObject(datum.uid, json);
             } else if (datum.value != json) {
-                newOps.push(...this._jsonToModel(json, datum.counter + 1, parent, datum.index));
+                newOps.push(...jsonToModel(json, parent, datum.index));
                 return;
             }
         };
 
+
+        // Creates the list of operations necessary to add the given JSON to a model.
+        // parent & index may be undefined if this is to be a root object.
+        const jsonToModel = (json: JSONType, parent: UniqueID, index: string | Array<number>): Array<Datum> => {
+            const data: Array<Datum> = [];
+
+            const addArray = (json: Array<JSONType>, parent: UniqueID) => {
+                let leftBound = undefined;
+                json.forEach(value => {
+                    const index = vectorIndexBetween(leftBound, undefined);
+                    addValue(value, 0, parent, index);
+                    leftBound = index;
+                });
+            };
+
+            const addObject = (json: object, parent: UniqueID) => {
+                for (const key in json) {
+                    addValue(json[key], 0, parent, key);
+                }
+            };
+
+            const addValue = (json: JSONType, counter: number, parent: UniqueID, index: string | Array<number>) => {
+                const typeOfValue = betterTypeOf(json);
+                let value;
+                if (typeOfValue == "array") {
+                    value = [];
+                } else if (typeOfValue == "object") {
+                    value = {};
+                } else {
+                    value = json;
+                }
+                const datum: Datum = {
+                    uid: this.getUID(),
+                    value: value,
+                    counter: counter++,
+                };
+                if (parent !== undefined) {
+                    datum.parent = parent;
+                }
+                if (index !== undefined) {
+                    datum.index = index;
+                }
+                data.push(datum);
+                if (typeOfValue == "array") {
+                    addArray(json, datum.uid);
+                } else if (typeOfValue == "object") {
+                    addObject(json, datum.uid);
+                }
+            };
+
+            addValue(json, counter, parent, index);
+
+            return data;
+        };
+
+        // Creates an operations to remove an entry from the model..
+        // Parent & index may be undefined if this is to be a root object.
+        const tombstone = (uid: UniqueID, datum: Datum): Datum => {
+            const tombstone: Datum = {
+                uid: uid,
+                counter: counter++,
+            };
+            if (datum.parent !== undefined) {
+                tombstone.parent = datum.parent;
+            }
+            if (datum.index !== undefined) {
+                tombstone.index = datum.index;
+            }
+            return tombstone;
+        };
+
+        // Actual content of _jsonDiff:
+
+        const newOps: Array<Datum> = [];
+        let counter = this._nextCounterValue(model);
+
         checkValue(undefined, filterChildren(model, undefined), json); // undefined parent indicates root object
 
         return newOps;
-    }
-
-
-    // Creates the list of operations necessary to add the given JSON to a model.
-    // parent & index may be undefined if this is to be a root object.
-    _jsonToModel(json: JSONType, counter: number, parent: UniqueID, index: string | Array<number>): Array<Datum> {
-        const data: Array<Datum> = [];
-
-        const addArray = (json: Array<JSONType>, parent: UniqueID) => {
-            let leftBound = undefined;
-            json.forEach(value => {
-                const index = vectorIndexBetween(leftBound, undefined);
-                addValue(value, 0, parent, index);
-                leftBound = index;
-            });
-        };
-
-        const addObject = (json: object, parent: UniqueID) => {
-            for (const key in json) {
-                addValue(json[key], 0, parent, key);
-            }
-        };
-
-        const addValue = (json: JSONType, counter: number, parent: UniqueID, index: string | Array<number>) => {
-            const typeOfValue = betterTypeOf(json);
-            let value;
-            if (typeOfValue == "array") {
-                value = [];
-            } else if (typeOfValue == "object") {
-                value = {};
-            } else {
-                value = json;
-            }
-            const datum: Datum = {
-                uid: this.getUID(),
-                value: value,
-                counter: counter,
-            };
-            if (parent !== undefined) {
-                datum.parent = parent;
-            }
-            if (index !== undefined) {
-                datum.index = index;
-            }
-            data.push(datum);
-            if (typeOfValue == "array") {
-                addArray(json, datum.uid);
-            } else if (typeOfValue == "object") {
-                addObject(json, datum.uid);
-            }
-        };
-
-        addValue(json, counter, parent, index);
-
-        return data;
     }
 }

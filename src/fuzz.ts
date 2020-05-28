@@ -116,54 +116,43 @@ function assertJSONEqual(a: any, b: any, extra: object) {
         for (let item in extra) {
             console.log(item, "=", extra[item]);
         }
+        process.exit();
     }
 }
 
 let user1;
 let s, inputJSON, prev = {model: undefined, json: undefined};
 
-// Very basic fuzz to test inserting into an empty list
-console.log("Test inserting into empty list...");
-for (let i = 0; i < 100; i++) {
-    user1 = new LocalState("user1");
-    s = user1.state();
-    inputJSON = [];
-    user1.setState(s.model, inputJSON);
-    prev = user1.state();
-
-    inputJSON = ["a", "b", "c"];
-    s = user1.state();
-    user1.setState(s.model, inputJSON);
-    assertJSONEqual(user1.state().json, inputJSON, {"prev json": prev.json, "prev model": prev.model, "cur model": user1.state().model});
-    prev = user1.state();
-
-    inputJSON = ["a"];
-    s = user1.state();
-    user1.setState(s.model, inputJSON);
-    assertJSONEqual(user1.state().json, inputJSON, {"prev json": prev.json, "prev model": prev.model, "cur model": user1.state().model});
-    prev = user1.state();
-
-    inputJSON = [1, null, 2];
+function mutate(inputJSON: JSONType) {
     s = user1.state();
     user1.setState(s.model, inputJSON);
     assertJSONEqual(user1.state().json, inputJSON, {"prev json": prev.json, "prev model": prev.model, "cur model": user1.state().model});
     prev = user1.state();
 }
 
+// Very basic fuzz to test inserting into an empty list
+console.log("Test inserting into empty list...");
+for (let i = 0; i < 100; i++) {
+    user1 = new LocalState("user1");
+
+    mutate([]);
+    mutate(["a", "b", "c"]);
+    mutate(["a"]);
+    mutate([1, null, 2]);
+
+    mutate([6, 7]);
+    mutate([5, 6, "a"]);
+
+    mutate([ "c", 1 ]);
+    mutate([ "c", 2, 1]);
+}
+
 // Fuzz with single client
 console.log("Test single client...");
-for (let i = 0; i < 10; i++) {
+for (let i = 0; i < 20; i++) {
     user1 = new LocalState("user1");
-    s = user1.state();
-    inputJSON = randomJSON(1.5);
-    user1.setState(s.model, inputJSON);
-    assertJSONEqual(user1.state().json, inputJSON, {"prev json": prev.json, "prev model": prev.model, "cur model": user1.state().model});
-    prev = user1.state();
-    for (let j = 0; j < 10; j++) {
-        s = user1.state();
-        inputJSON = variationOn(s.json, 0.05);
-        user1.setState(s.model, inputJSON);
-        assertJSONEqual(user1.state().json, inputJSON, {"prev json": prev.json, "prev model": prev.model, "cur model": user1.state().model});
-        prev = user1.state();
+    mutate(randomJSON(1.5));
+    for (let j = 0; j < 20; j++) {
+        mutate(variationOn(prev.json, 0.05));
     }
 }
