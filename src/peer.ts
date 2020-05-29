@@ -1,4 +1,4 @@
-import {State, Datum, Comparable, JSONType} from "./state";
+import {State, Datum, Comparable, JSONType, UniqueID} from "./state";
 import {Peer} from "simple-peer";
 
 export class StateOverSimplePeer extends State {
@@ -34,7 +34,7 @@ export class StateOverSimplePeer extends State {
         if (message.action == "sendCompleteState") {
             this.emitCompleteState();
         } else if(message.action == "update") {
-            this.apply(message.data);
+            this.apply(message.data, message.tombstones);
         }
         console.log("RX:", message);
         console.log("Model is now:", this._model);
@@ -60,10 +60,11 @@ export class StateOverSimplePeer extends State {
     }
 
     // Send messages to peers
-    _emit(data: Array<Datum>) {
+    _emit(data: Array<Datum>, tombstones: Array<UniqueID>) {
         this._sendMessage({
             "action": "update",
             "data": data,
+            "tombstones": tombstones,
         });
     }
 }

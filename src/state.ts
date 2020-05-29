@@ -18,7 +18,7 @@ export interface UniqueID {
 export interface Datum {
     uid: UniqueID;
     parent?: UniqueID;
-    value?: any;
+    value: any;
     counter: number; // Lamport counter
     index?: Array<number> | string; // An array index is done using a vector, and an object index is a string.
 }
@@ -27,9 +27,6 @@ export type Listener = (model: Array<Datum>, json: JSONType) => void;
 
 // More practical version of typeOf for JSON
 export function betterTypeOf(item: Comparable): string {
-    if (item === undefined) {
-        return "empty";
-    }
     if (item === null) {
         return "null";
     }
@@ -54,7 +51,6 @@ export function betterTypeOf(item: Comparable): string {
 // Compares values. Returns negative if first < second, positive if first > second, and zero if they are equal.
 export function compare(first: Comparable, second: Comparable): number {
     const typeOrdering = {
-        "empty": -1,
         "null": 0,
         "boolean": 1,
         "number": 2,
@@ -293,6 +289,11 @@ export function jsonCopy(json: JSONType): JSONType {
     return JSON.parse(JSON.stringify(json));
 }
 
+// Returns true if the given JSON is in the list
+export function jsonInList(searchFor: JSONType, list: Array<JSONType>) {
+    return list.reduce((acc, entry) => (acc || jsonEqual(entry, searchFor)), false);
+}
+
 // Allocates a new vector index that falls between the two given vector indices.
 export function vectorIndexBetween(left: Array<number>, right: Array<number>) {
     // Uses the algorithm described in this paper, but with only the boundary+ strategy right now.
@@ -355,6 +356,8 @@ export class State {
     _uid: UniqueID;
     _model: Array<Datum>;
     _json: JSONType;
+    _tombstones: Array<UniqueID>;
+    _counter: number;
     _listeners: Array<Listener>;
 
     constructor(userID: Comparable) {
@@ -364,6 +367,8 @@ export class State {
         }
         this._model = [];
         this._json = null;
+        this._tombstones = [];
+        this._counter = 0;
         this._listeners = [];
     }
 
@@ -382,8 +387,8 @@ export class State {
     // For remote changes, set emit=false to avoid flooding the channel.
     // Also converts a Model into its JSON representation
     // and, in doing so, prunes non-useful entries in the model.
-    apply(actions: Array<Datum>, emit?: boolean) {
-        if (actions.length == 0) {
+    apply(actions: Array<Datum>, tombstones: Array<UniqueID>, emit?: boolean) {
+        if (actions.length == 0 && tombstones.length == 0) {
             return;
         }
 
@@ -394,7 +399,14 @@ export class State {
         });
         // End XXX
 
+        // Apply actions
         this._model.push(...actions);
+        this._tombstones.push(...tombstones);
+        this._counter = Math.max(this._counter, this._highestCounter(actions));
+
+        // Apply tombstones
+        this._model = this._model.filter(item => !jsonInList(item.uid, this._tombstones));
+
         const result = modelToJson(this._model, undefined); // undefined parent indicates root object
         if (result === undefined) {
             this._json = null;
@@ -405,13 +417,10 @@ export class State {
         // Prune useless data
         this._model = this._model.filter(item => result.usefulData.indexOf(item) >= 0);
 
-        // We can further prune any tombstone which is less than the largest counter value in the graph (likely all tombstones)
-        // XXX can't implement this yet until tombstones specify exactly which UID they are deleting.
-        //const topCounter = this._highestCounter(this._model);
-        //this._model = this._model.filter(item => !(item.value === undefined && item.counter < topCounter));
+        // TODO prune tombstones according to version vector
 
         if (emit) {
-            this._emit(actions);
+            this._emit(actions, tombstones);
         }
 
         this._changed(this._model, this._json);
@@ -422,7 +431,7 @@ export class State {
         if (this._model.length == 0) {
             return;
         }
-        this._emit(this._model);
+        this._emit(this._model, this._tombstones);
     }
 
     // Gets the current state (internal & JSON)
@@ -437,7 +446,7 @@ export class State {
     // Sets the current state based on an old model and new JSON
     setState(model: Array<Datum>, json: JSONType) {
         const diff = this._jsonDiff(model, json);
-        this.apply(diff, true);
+        this.apply(diff.actions, diff.tombstones, true);
     }
 
     // Adds a new listener callback function, which will be called when the model changes
@@ -461,7 +470,7 @@ export class State {
     }
 
     // Override this method to send out state changes over a channel
-    _emit(model: Array<Datum>) {
+    _emit(model: Array<Datum>, tombstones: Array<UniqueID>) {
         // Not implemented
     }
 
@@ -471,7 +480,7 @@ export class State {
     }
 
     // Diffs a JSON object with the given model, returning a list of new items to add to the model.
-    _jsonDiff(model: Array<Datum>, json: JSONType): Array<Datum> {
+    _jsonDiff(model: Array<Datum>, json: JSONType): {actions: Array<Datum>, tombstones: Array<UniqueID>} {
 
         const checkArray = (parent: UniqueID, json: Array<JSONType>) => {
             interface DiffOperation {
@@ -619,7 +628,7 @@ export class State {
                 // Passing in json === undefined indicates that any value at this slot should be deleted.
                 // datum.value being undefined represents a deletion action in the model, and so
                 // datum.value being defined indicates that there is in fact a value to delete
-                newOps.push(tombstone(this.getUID(), datum));
+                tombstones.push(datum.uid);
                 return;
             }
             const typeOfModel = betterTypeOf(datum.value);
@@ -649,18 +658,18 @@ export class State {
                 let leftBound = undefined;
                 json.forEach(value => {
                     const index = vectorIndexBetween(leftBound, undefined);
-                    addValue(value, 0, parent, index);
+                    addValue(value, parent, index);
                     leftBound = index;
                 });
             };
 
             const addObject = (json: object, parent: UniqueID) => {
                 for (const key in json) {
-                    addValue(json[key], 0, parent, key);
+                    addValue(json[key], parent, key);
                 }
             };
 
-            const addValue = (json: JSONType, counter: number, parent: UniqueID, index: string | Array<number>) => {
+            const addValue = (json: JSONType, parent: UniqueID, index: string | Array<number>) => {
                 const typeOfValue = betterTypeOf(json);
                 let value;
                 if (typeOfValue == "array") {
@@ -673,7 +682,7 @@ export class State {
                 const datum: Datum = {
                     uid: this.getUID(),
                     value: value,
-                    counter: counter++,
+                    counter: this._counter++,
                 };
                 if (parent !== undefined) {
                     datum.parent = parent;
@@ -689,34 +698,21 @@ export class State {
                 }
             };
 
-            addValue(json, counter, parent, index);
+            addValue(json, parent, index);
 
             return data;
-        };
-
-        // Creates an operations to remove an entry from the model..
-        // Parent & index may be undefined if this is to be a root object.
-        const tombstone = (uid: UniqueID, datum: Datum): Datum => {
-            const tombstone: Datum = {
-                uid: uid,
-                counter: counter++,
-            };
-            if (datum.parent !== undefined) {
-                tombstone.parent = datum.parent;
-            }
-            if (datum.index !== undefined) {
-                tombstone.index = datum.index;
-            }
-            return tombstone;
         };
 
         // Actual content of _jsonDiff:
 
         const newOps: Array<Datum> = [];
-        let counter = this._highestCounter(model) + 1;
+        const tombstones: Array<UniqueID> = [];
 
         checkValue(undefined, filterChildren(model, undefined), json); // undefined parent indicates root object
 
-        return newOps;
+        return {
+            actions: newOps,
+            tombstones: tombstones,
+        };
     }
 }

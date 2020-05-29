@@ -1,4 +1,4 @@
-import {State, Datum, Comparable} from "./state";
+import {State, Datum, Comparable, UniqueID} from "./state";
 
 // This class is not particuarly useful, but shows the simplest way that State can be extended.
 
@@ -29,9 +29,9 @@ export class LocalState extends State {
     }
 
     // Override emit function to pass data to peers
-    _emit(data: Array<Datum>) {
+    _emit(data: Array<Datum>, tombstones: Array<UniqueID>) {
         this._peers.forEach(peer => {
-            peer.apply(data);
+            peer.apply(data, tombstones);
         });
     }
 }
