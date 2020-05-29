@@ -47,6 +47,12 @@ function stateChanged(model, json) {
 }
 
 function connect() {
+    console.log("Connecting...");
+
+    if (location.hash.length < 2) {
+        return;
+    }
+
     state = new crjson.StateOverWebSocket(uuidv4());
 
     // Listen for changes so we can update the textbox
@@ -54,7 +60,7 @@ function connect() {
     state.triggerListeners(stateChanged);
 
     // Connect to websocket
-    const ws = new WebSocket("ws://localhost:9898");
+    const ws = new WebSocket("ws://localhost:9898/" + location.hash.substr(1));
     document.querySelector("#wsStatus").textContent = "Connecting...";
 
     ws.addEventListener("error", event => {
@@ -73,6 +79,9 @@ function connect() {
     });
 }
 
+function hashChanged(event) {
+}
+
 </script>
 <style>
 textarea {
@@ -83,7 +92,7 @@ textarea {
 </style>
 </head>
 <body>
-<div id="wsStatus"></div>
+<div id="wsStatus">Edit the location hash to connect to a room.</div>
 <div id="app">
     <textarea id="sharedJSON" readonly></textarea>
     <button id="editButton">edit</button>
@@ -97,6 +106,7 @@ textarea {
 document.querySelector("#jsonForm").style.display = "none";
 document.querySelector("#editButton").addEventListener("click", editJSON);
 document.querySelector("#jsonForm").addEventListener("submit", jsonFormSubmitted);
+window.addEventListener("hashchange", connect, false);
 connect();
 </script>
 </body>

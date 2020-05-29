@@ -49,7 +49,6 @@ export class StateOverWebSocket extends State {
         ws.addEventListener("message", this._listenerFunction);
         this._ws = ws;
         this._requestCompleteState();
-        this.emitCompleteState();
     }
 
     // Stop listening on the websocket
