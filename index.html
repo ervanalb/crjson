@@ -1,0 +1,152 @@
+<html>
+<head>
+<script src="crjson.js"></script>
+<script src="https://unpkg.com/simple-peer@5.9.0/simplepeer.min.js"></script>
+<script>
+let peer;
+let state;
+let editState;
+
+// Quick and dirty UUID algorithm from stack overflow
+function uuidv4() {
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+        var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
+        return v.toString(16);
+    });
+}
+
+function setupPeer(initiator) {
+    document.querySelector("#setup1").style.display = "none";
+    document.querySelector("#setup2").style.display = "block";
+
+    peer = new SimplePeer({
+        initiator: initiator,
+        trickle: true,
+        config: {
+            iceServers: [
+                {urls: "stun:stun1.l.google.com:19302"},
+                {urls: "stun:stun2.l.google.com:19302"},
+                {urls: "stun:stun.ekiga.net"},
+            ],
+            iceCandidatePoolSize: 10,
+        }
+    });
+
+    peer.on("error", err => {
+        console.log("SimplePeer error:", err);
+    });
+
+    peer.on("signal", data => {
+        document.querySelector('#outgoing').value += btoa(JSON.stringify(data)) + "\n";
+        console.log(data);
+    });
+
+    peer.on("connect", () => {
+        document.querySelector("#setup2").style.display = "none";
+        document.querySelector("#app").style.display = "block";
+
+        state = new crjson.StateOverSimplePeer(uuidv4());
+
+        // Initial fill
+        const s = state.state();
+        stateChanged(s.model, s.json);
+
+        // Listen for changes so we can update the textbox
+        state.addListener(stateChanged);
+
+        // Connect to peer
+        state.addPeer(peer);
+    });
+}
+
+function stateChanged(model, json) {
+    document.querySelector("#sharedJSON").value = JSON.stringify(json);
+}
+
+function signalFormSubmitted(event) {
+    event.preventDefault();
+
+    if (peer !== undefined) {
+        const lines = document.querySelector("#incoming").value.split("\n");
+        lines.forEach(line => {
+            line = line.replace(/^\s+|\s+$/g, '');
+            if (line) {
+                peer.signal(JSON.parse(atob(line)));
+            }
+        });
+        document.querySelector("#outgoing").value = "";
+        document.querySelector("#incoming").value = "";
+    }
+}
+
+function editJSON() {
+    document.querySelector("#jsonForm").style.display = "block";
+
+    if (state !== undefined) {
+        editState = state.state();
+        document.querySelector("#myJSON").value = JSON.stringify(editState.json);
+    }
+}
+
+function jsonFormSubmitted(event) {
+    event.preventDefault();
+
+    if (state === undefined || editState === undefined) {
+        return;
+    }
+
+    let myJSON;
+    try {
+        myJSON = JSON.parse(document.querySelector("#myJSON").value);
+    } catch(err) {
+        document.querySelector("#jsonErrors").textContent = err;
+        return;
+    }
+
+    document.querySelector("#jsonErrors").textContent = "";
+    document.querySelector("#jsonForm").style.display = "none";
+    state.setState(editState.model, myJSON);
+}
+
+</script>
+<style>
+textarea {
+    height: 100px;
+    width: 400px;
+    display: block;
+}
+</style>
+</head>
+<body>
+<div id="setup1">
+<a href="javascript:setupPeer(true)">Host</a> or <a href="javascript:setupPeer(false)">Connect</a>
+</div>
+<div id="setup2">
+    <form id="incomingForm">
+        <div>Paste content from the other peer here:</div>
+        <textarea id="incoming"></textarea>
+        <button type="submit">submit</button>
+    </form>
+    <div>Copy content from this box into the other peer:</div>
+    <textarea id="outgoing" readonly></textarea>
+</div>
+<div id="app">
+    <textarea id="sharedJSON" readonly></textarea>
+    <button id="editButton">edit</button>
+    <form id="jsonForm">
+        <textarea id="myJSON"></textarea>
+        <div id="jsonErrors"></div>
+        <button type="submit">submit</button>
+    </form>
+</div>
+<script>
+document.querySelector("#incomingForm").addEventListener("submit", signalFormSubmitted);
+document.querySelector("#editButton").addEventListener("click", editJSON);
+document.querySelector("#jsonForm").addEventListener("submit", jsonFormSubmitted);
+document.querySelector("#setup1").style.display = "block";
+document.querySelector("#setup2").style.display = "none";
+document.querySelector("#app").style.display = "none";
+document.querySelector("#jsonForm").style.display = "none";
+</script>
+</body>
+</html>
