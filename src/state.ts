@@ -617,17 +617,16 @@ export class State {
 
         const checkValue = (parent: UniqueID, data: Array<Datum>, json: JSONType) => {
             const datum = mergeAtoms(data);
-            if (datum === undefined) {
-                // Datum is undefined if data was empty, such as a totally blank slate model
-                if (json !== undefined) {
-                    newOps.push(...jsonToModel(json, parent, undefined));
-                    return;
-                }
+            // datum === undefined if data was empty, such as a totally blank slate model.
+            // Passing in json === undefined indicates that any value at this slot should be deleted.
+            if (datum === undefined && json === undefined) {
+                return;
             }
-            if (json === undefined && datum.value !== undefined) {
-                // Passing in json === undefined indicates that any value at this slot should be deleted.
-                // datum.value being undefined represents a deletion action in the model, and so
-                // datum.value being defined indicates that there is in fact a value to delete
+            if (datum === undefined && json !== undefined) {
+                newOps.push(...jsonToModel(json, parent, undefined));
+                return;
+            }
+            if (json === undefined && datum !== undefined) {
                 tombstones.push(datum.uid);
                 return;
             }

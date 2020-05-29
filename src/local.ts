@@ -12,7 +12,7 @@ export class LocalState extends State {
 
     // Adds connection to a new local State object to keep in sync
     addPeer(peer: LocalState) {
-        if (this._peers.indexOf(peer) < 0) {
+        if (this._peers.indexOf(peer) < 0 && peer !== this) {
             this._peers.push(peer); // Add peer
             peer.addPeer(this); // Make sure peer adds us
             peer.emitCompleteState(); // Request that the peer send its complete state

@@ -1,4 +1,4 @@
-import {jsonEqual, betterTypeOf, arrayMap, objectMap, JSONType} from "./state";
+import {jsonEqual, jsonCopy, betterTypeOf, arrayMap, objectMap, JSONType} from "./state";
 import {LocalState} from "./local";
 
 function randomString(): string {
@@ -105,7 +105,7 @@ function variationOn(json: JSONType, p: number) {
         return randomJSON(alpha)
     }
 
-    return variationOnValue(json);
+    return variationOnValue(jsonCopy(json));
 }
 
 function assertJSONEqual(a: any, b: any, extra: object) {
@@ -116,22 +116,20 @@ function assertJSONEqual(a: any, b: any, extra: object) {
         for (let item in extra) {
             console.log(item, "=", extra[item]);
         }
-        process.exit();
+        process.exit(1);
     }
 }
 
 let user1;
-let s, inputJSON, prev = {model: undefined, json: undefined};
 
 function mutate(inputJSON: JSONType) {
-    s = user1.state();
+    const s = user1.state();
     user1.setState(s.model, inputJSON);
-    assertJSONEqual(user1.state().json, inputJSON, {"prev json": prev.json, "prev model": prev.model, "cur model": user1.state().model});
-    prev = user1.state();
+    assertJSONEqual(user1.state().json, inputJSON, {"prev json": s.json, "prev model": s.model, "cur model": user1.state().model});
 }
 
 // Very basic fuzz to test inserting into an empty list
-console.log("Test inserting into empty list...");
+console.log("Test simple operations...");
 for (let i = 0; i < 100; i++) {
     user1 = new LocalState("user1");
 
@@ -148,11 +146,43 @@ for (let i = 0; i < 100; i++) {
 }
 
 // Fuzz with single client
-console.log("Test single client...");
+console.log("Fuzz single client...");
 for (let i = 0; i < 20; i++) {
     user1 = new LocalState("user1");
     mutate(randomJSON(1.5));
     for (let j = 0; j < 20; j++) {
-        mutate(variationOn(prev.json, 0.05));
+        mutate(variationOn(user1.state().json, 0.05));
+    }
+}
+
+// Fuzz with multiple client
+function initialize(user: LocalState, inputJSON: JSONType) {
+    const s = user.state();
+    user.setState(s.model, inputJSON);
+    assertJSONEqual(user.state().json, inputJSON, {"prev json": s.json, "prev model": s.model, "cur model": user.state().model});
+}
+
+console.log("Fuzz multiple client...");
+const n_users = 10;
+for (let i = 0; i < 20; i++) {
+    const userVector = Array.from(new Array(n_users).keys()).map((ui) => new LocalState(`user${ui}`));
+
+    userVector.forEach((userA) => {
+        userVector.forEach((userB) => {
+            userA.addPeer(userB);
+        });
+    });
+
+    const startingJSON = randomJSON(1.5);
+    userVector.forEach((u) => initialize(u, startingJSON));
+    for (let j = 0; j < 20; j++) {
+        const stateVector = userVector.map((user) => user.state());
+        stateVector.forEach((state, ui) => userVector[ui].setState(state.model, variationOn(state.json, 0.05)));
+
+        // Check that all parties agree
+        const correctJSON = userVector[0].state().json;
+        userVector.forEach((user) => {
+            assertJSONEqual(user.state().json, correctJSON, {});
+        });
     }
 }
