@@ -9,6 +9,7 @@
     "build": "webpack --mode production",
     "start:dev": "webpack-dev-server --mode development",
     "start:prod": "webpack-dev-server --mode production",
+    "start:server": "tsc && node dist/websocket_server.js",
     "test": "tsc && node dist/fuzz.js"
   },
   "author": "Eric Van Albert",
@@ -23,6 +24,7 @@
     "copy-webpack-plugin": "^5.1.1"
   },
   "dependencies": {
-    "simple-peer": "^9.7.2"
+    "simple-peer": "^9.7.2",
+    "websocket": "^1.0.31"
   }
 }

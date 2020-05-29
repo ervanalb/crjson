@@ -462,6 +462,11 @@ export class State {
         }
     }
 
+    // Triggers a call to all listeners, even if nothing has changed
+    triggerListeners() {
+        this._changed(this._model, this._json);
+    }
+
     // Calls all listeners
     _changed(model: Array<Datum>, json: JSONType) {
         this._listeners.forEach(listener => {

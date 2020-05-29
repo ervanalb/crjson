@@ -1,0 +1,103 @@
+<html>
+<head>
+<script src="crjson.js"></script>
+<script>
+let state;
+let editState;
+
+// Quick and dirty UUID algorithm from stack overflow
+function uuidv4() {
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+        var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
+        return v.toString(16);
+    });
+}
+
+function editJSON() {
+    document.querySelector("#jsonForm").style.display = "block";
+
+    if (state !== undefined) {
+        editState = state.state();
+        document.querySelector("#myJSON").value = JSON.stringify(editState.json);
+    }
+}
+
+function jsonFormSubmitted(event) {
+    event.preventDefault();
+
+    if (state === undefined || editState === undefined) {
+        return;
+    }
+
+    let myJSON;
+    try {
+        myJSON = JSON.parse(document.querySelector("#myJSON").value);
+    } catch(err) {
+        document.querySelector("#jsonErrors").textContent = err;
+        return;
+    }
+
+    document.querySelector("#jsonErrors").textContent = "";
+    document.querySelector("#jsonForm").style.display = "none";
+    state.setState(editState.model, myJSON);
+}
+
+function stateChanged(model, json) {
+    document.querySelector("#sharedJSON").value = JSON.stringify(json);
+}
+
+function connect() {
+    state = new crjson.StateOverWebSocket(uuidv4());
+
+    // Listen for changes so we can update the textbox
+    state.addListener(stateChanged);
+    state.triggerListeners(stateChanged);
+
+    // Connect to websocket
+    const ws = new WebSocket("ws://localhost:9898");
+    document.querySelector("#wsStatus").textContent = "Connecting...";
+
+    ws.addEventListener("error", event => {
+        document.querySelector("#wsStatus").textContent = "Connection error: " + event.toString();
+        state.detachWebSocket();
+    });
+    ws.addEventListener("close", () => {
+        document.querySelector("#wsStatus").textContent = "Connection closed";
+        state.detachWebSocket();
+    });
+    ws.addEventListener("open", () => {
+        document.querySelector("#wsStatus").textContent = "Connection established";
+
+        // Connect to peer
+        state.attachWebsocket(ws);
+    });
+}
+
+</script>
+<style>
+textarea {
+    height: 100px;
+    width: 400px;
+    display: block;
+}
+</style>
+</head>
+<body>
+<div id="wsStatus"></div>
+<div id="app">
+    <textarea id="sharedJSON" readonly></textarea>
+    <button id="editButton">edit</button>
+    <form id="jsonForm">
+        <textarea id="myJSON"></textarea>
+        <div id="jsonErrors"></div>
+        <button type="submit">submit</button>
+    </form>
+</div>
+<script>
+document.querySelector("#jsonForm").style.display = "none";
+document.querySelector("#editButton").addEventListener("click", editJSON);
+document.querySelector("#jsonForm").addEventListener("submit", jsonFormSubmitted);
+connect();
+</script>
+</body>
+</html>
