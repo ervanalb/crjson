@@ -5,8 +5,8 @@
   "main": "dist/index.js",
   "scripts": {
     "start": "tsc && node dist/node_test_app.js",
-    "dev": "webpack --mode development",
-    "build": "webpack --mode production",
+    "dev": "tsc && webpack --mode development",
+    "build": "tsc && webpack --mode production",
     "start:dev": "webpack-dev-server --mode development",
     "start:prod": "webpack-dev-server --mode production",
     "start:server": "tsc && node dist/websocket_server.js",
